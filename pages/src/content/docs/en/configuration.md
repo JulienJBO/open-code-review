@@ -326,6 +326,17 @@ failed with classification `input_budget`; the main task gets one compression
 attempt and one retry first, because compression is the safe reduction it
 already knows.
 
+That retry only works while the compression request itself fits. The
+compression prompt embeds the conversation being compressed, so once the
+conversation is what crossed the ceiling, so does the compression request — and
+a strict guard refuses it, leaving "reduce first" unreachable exactly when it
+matters. `--allow-input-budget-reduction` lifts the ceiling for that one
+request. It is opt-in because it is a measured trade-off, not a free fix: on a
+5-diff corpus the strict guard completed 8/15 items with 0 requests over the
+cliff, the exempted compression completed 10/15 but let 1 request cross. Pair
+it with `--max-tokens` so compression also triggers before the ceiling rather
+than at it.
+
 The estimate uses OCR's tokenizer, which under-counts when the provider's
 differs. `--request-token-safety-margin` (default `0.9`) is the share of the
 ceiling a request may spend, and absorbs that gap: `--max-request-input-tokens

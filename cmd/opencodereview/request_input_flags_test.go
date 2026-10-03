@@ -19,7 +19,7 @@ func TestParseReviewFlags_RequestInputBudgetParsed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	budget, err := requestInputBudget(opts.maxRequestInputTokens, opts.requestTokenSafetyMargin)
+	budget, err := requestInputBudget(opts.maxRequestInputTokens, opts.requestTokenSafetyMargin, false)
 	if err != nil {
 		t.Fatalf("budget rejected after a successful parse: %v", err)
 	}
@@ -36,7 +36,7 @@ func TestParseReviewFlags_RequestInputBudgetDefaultsToDisabledWithDefaultMargin(
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	budget, err := requestInputBudget(opts.maxRequestInputTokens, opts.requestTokenSafetyMargin)
+	budget, err := requestInputBudget(opts.maxRequestInputTokens, opts.requestTokenSafetyMargin, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +55,7 @@ func TestParseReviewFlags_RequestInputBudgetZeroMarginMeansDefault(t *testing.T)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	budget, err := requestInputBudget(opts.maxRequestInputTokens, opts.requestTokenSafetyMargin)
+	budget, err := requestInputBudget(opts.maxRequestInputTokens, opts.requestTokenSafetyMargin, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,6 +91,7 @@ func TestParseReviewFlags_RequestInputBudgetRejected(t *testing.T) {
 		{"margin above one", []string{"--max-request-input-tokens", "32000", "--request-token-safety-margin", "1.5"}, "--request-token-safety-margin"},
 		{"negative margin", []string{"--max-request-input-tokens", "32000", "--request-token-safety-margin", "-0.5"}, "--request-token-safety-margin"},
 		{"margin without a ceiling", []string{"--request-token-safety-margin", "0.9"}, "--max-request-input-tokens"},
+		{"reduction without a ceiling", []string{"--allow-input-budget-reduction"}, "--max-request-input-tokens"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -110,7 +111,7 @@ func TestParseScanFlags_RequestInputBudgetParsed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	budget, err := requestInputBudget(opts.maxRequestInputTokens, opts.requestTokenSafetyMargin)
+	budget, err := requestInputBudget(opts.maxRequestInputTokens, opts.requestTokenSafetyMargin, false)
 	if err != nil {
 		t.Fatal(err)
 	}

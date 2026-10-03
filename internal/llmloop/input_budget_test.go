@@ -32,7 +32,7 @@ func metaDeps(deps Deps) Deps {
 // exercise the composition the command wires rather than a stand-in.
 func guardedDeps(client llm.LLMClient, limit int, maxTokens int) Deps {
 	deps := newTestDeps(llm.NewRequestInputGuardClient(client, "fake",
-		llm.RequestInputBudget{ProviderLimitTokens: limit, SafetyMargin: 0.9}))
+		llm.RequestInputBudget{ProviderLimitTokens: limit, SafetyMargin: 0.9, AllowReductionExemption: true}))
 	deps.Template = template.Template{MaxTokens: maxTokens, MaxToolRequestTimes: 3}
 	return metaDeps(deps)
 }
@@ -132,11 +132,12 @@ func TestRunMainTask_InputBudgetRetryRecordsTheConversationActuallySent(t *testi
 	}
 }
 
-// memory_compression_task goes through the same guard: when the guard refuses
-// it, compression fails and the main-task refusal stands, rather than the run
-// quietly proceeding on an over-budget conversation.
-func TestRunMainTask_MemoryCompressionRequestIsGuardedToo(t *testing.T) {
-	client := &fakeClient{}
+// memory_compression_task is the one request the ceiling does not hold: it is
+// the reduction path, and refusing it turns "reduce first, refuse after" into
+// "always refuse". A main task refused for input budget must therefore still
+// reach the provider through compression — once.
+func TestRunMainTask_MemoryCompressionIsTheReductionPathNotARefusal(t *testing.T) {
+	client := &fakeClient{responses: []*llm.ChatResponse{taskDoneResponseWithArguments(`{}`)}}
 	deps := guardedDeps(client, 1_000, 3_000)
 	deps.Template.MemoryCompressionTask.Messages = []template.ChatMessage{
 		{Role: "user", Content: "summarize the following review so far:\n{{context}}"},
@@ -144,14 +145,22 @@ func TestRunMainTask_MemoryCompressionRequestIsGuardedToo(t *testing.T) {
 
 	_, _, err := NewRunner(deps).RunMainTask(context.Background(), heavyConversation(6), "a.go")
 	if err == nil {
-		t.Fatal("expected the run to end on a refusal")
+		t.Fatal("a conversation that still does not fit must end on a refusal")
 	}
 	if _, ok := llm.AsRequestInputBudgetError(err); !ok {
 		t.Fatalf("err = %v, want a request-input refusal", err)
 	}
-	// Both the main request and the compression request were refused: nothing
-	// reached the provider, which is the whole point of the guard.
-	if len(client.requests) != 0 {
-		t.Fatalf("provider requests = %d, want 0", len(client.requests))
+	// The reduction was still attempted — that is what the exemption buys.
+	if len(client.requests) == 0 {
+		t.Fatal("the compression request must reach the provider: it is the reduction")
+	}
+	// And no main_task request was sent over the ceiling to find that out.
+	for _, req := range client.requests {
+		if got := CountMessagesTokens(req.Messages); got > 900 && len(req.Tools) == 0 {
+			continue // the compression request itself carries the conversation
+		}
+		if got := CountMessagesTokens(req.Messages); got > 900 {
+			t.Errorf("a main request of %d tokens was sent above the 900-token ceiling", got)
+		}
 	}
 }
