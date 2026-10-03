@@ -234,7 +234,7 @@ var newRetryCollector = llm.NewRetryCollector
 // tpl — defaulting when the config file is absent), resolves the LLM
 // endpoint (honoring resolveOpts), and
 // returns the runtime bundle. tpl is mutated in place.
-func loadLLMRuntime(tpl *template.Template, toolConfigPath string, resolveOpts llm.ResolveOptions) (*llmRuntime, error) {
+func loadLLMRuntime(tpl *template.Template, toolConfigPath string, resolveOpts llm.ResolveOptions, inputBudget llm.RequestInputBudget) (*llmRuntime, error) {
 	toolEntries, err := toolsconfig.Load(toolConfigPath)
 	if err != nil {
 		return nil, fmt.Errorf("load tools: %w", err)
@@ -270,8 +270,27 @@ func loadLLMRuntime(tpl *template.Template, toolConfigPath string, resolveOpts l
 		rawHolder = llm.NewRawHolder()
 	}
 
+	client := llm.NewLLMClient(ep, retryCollector, rawHolder)
+
+	// The per-request input guard wraps the client here, the single place
+	// every run builds one, so no task family — and no family added later —
+	// can reach the provider without passing it. The decision sink resolves
+	// the writer lazily because the writer is bound per session, well after
+	// the client exists.
+	var guardOpts []llm.RequestInputGuardOption
+	if rawHolder != nil {
+		guardOpts = append(guardOpts, llm.WithRequestInputSink(llm.RequestInputSinkFunc(func(rec llm.RequestInputRecord) {
+			if sink := rawHolder.RequestInputSink(); sink != nil {
+				sink.WriteRequestInput(rec)
+			}
+		})))
+	}
+	if guarded := llm.NewRequestInputGuardClient(client, ep.Model, inputBudget, guardOpts...); guarded != nil {
+		client = guarded
+	}
+
 	return &llmRuntime{
-		Client:         llm.NewLLMClient(ep, retryCollector, rawHolder),
+		Client:         client,
 		Model:          ep.Model,
 		Provider:       ep.Provider,
 		PlanToolDefs:   planToolDefs,

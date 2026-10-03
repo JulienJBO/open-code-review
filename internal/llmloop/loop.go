@@ -391,13 +391,31 @@ func (r *Runner) RunMainTask(ctx context.Context, messages []llm.Message, taskKe
 		reqCtx := r.requestCtx(ctx, taskKey, session.MainTask, rec.RequestNo)
 
 		_, llmSpan := telemetry.StartLLMSpan(ctx, r.deps.Model)
-		resp, err := r.deps.LLMClient.CompletionsWithCtx(reqCtx, llm.ChatRequest{
+		req := llm.ChatRequest{
 			Model:     r.deps.Model,
 			Messages:  messages,
 			Tools:     r.deps.MainToolDefs,
 			MaxTokens: r.deps.Template.CompletionTokenLimit(),
 			SessionID: sessionID,
-		})
+		}
+		resp, err := r.deps.LLMClient.CompletionsWithCtx(reqCtx, req)
+		if _, overBudget := llm.AsRequestInputBudgetError(err); overBudget {
+			// The guard refuses instead of sending, and main_task is the one
+			// family with a safe, already-implemented reduction. It gets
+			// exactly one compression attempt and one retry; a refusal that
+			// survives compression is a real limit, not a missed retry.
+			if reduced, ok := r.reduceForInputBudget(ctx, messages, taskKey, st); ok {
+				messages = reduced
+				req.Messages = messages
+				startTime = time.Now()
+				// A second record: the first snapshot describes a conversation
+				// that was never sent, and the session must not claim the
+				// compressed answer answered it.
+				rec = fs.AppendTaskRecord(session.MainTask, append([]llm.Message(nil), messages...))
+				reqCtx = r.requestCtx(ctx, taskKey, session.MainTask, rec.RequestNo)
+				resp, err = r.deps.LLMClient.CompletionsWithCtx(reqCtx, req)
+			}
+		}
 		duration := time.Since(startTime)
 		if err != nil {
 			rec.SetError(err, duration)
@@ -834,6 +852,26 @@ func (r *Runner) addNextMessage(ctx context.Context, assistantContent string, to
 	}
 
 	return finalCount < warnLimit
+}
+
+// reduceForInputBudget compresses the conversation once after the per-request
+// input guard refused to send it.
+//
+// It reports false when compression fails or leaves the conversation
+// unchanged: re-sending an identical request would only earn a second
+// refusal and a second paid round-trip for the same bytes.
+func (r *Runner) reduceForInputBudget(ctx context.Context, messages []llm.Message, taskKey string, st *compressionState) ([]llm.Message, bool) {
+	before := CountMessagesTokens(messages)
+	r.cancelPendingCompression(st)
+	reduced, err := r.runCompression(ctx, messages, taskKey)
+	if err != nil {
+		fmt.Fprintf(stdout.Writer(), "[ocr] Input budget exceeded and memory compression failed: %v\n", err)
+		return nil, false
+	}
+	if after := CountMessagesTokens(reduced); after == 0 || after >= before {
+		return nil, false
+	}
+	return reduced, true
 }
 
 // parseToolArgs unmarshals a tool call's raw JSON arguments, always

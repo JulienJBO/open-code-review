@@ -139,6 +139,23 @@ func (h *RawHolder) get() RawWriter {
 	return h.w
 }
 
+// RequestInputSink returns the bound writer as a RequestInputSink when it
+// supports one, so the per-request input guard can log its decisions into the
+// same capture file. It returns nil when raw capture is off or when the
+// writer predates the guard; a nil sink simply means no decision trail, never
+// a failure.
+func (h *RawHolder) RequestInputSink() RequestInputSink {
+	w := h.get()
+	if w == nil {
+		return nil
+	}
+	sink, ok := w.(RequestInputSink)
+	if !ok {
+		return nil
+	}
+	return sink
+}
+
 // sensitiveHeaderKeywords names the substrings that mark a request header as
 // credential-bearing: provider secrets (authorization, x-api-key,
 // x-amz-security-token, x-session-token, …) and session cookies are named

@@ -59,15 +59,21 @@ const (
 	FailureConfiguration FailureClass = "configuration"
 	FailureInput         FailureClass = "input"
 	FailureBudget        FailureClass = "budget"
-	FailurePanic         FailureClass = "panic"
-	FailureUnknown       FailureClass = "unknown"
+	// FailureInputBudget marks an item the per-request input guard refused to
+	// send. It is deliberately distinct from FailureBudget, which means the
+	// aggregate run budget: one request over the provider's per-request cliff
+	// and a run that ran out of aggregate tokens need different fixes, and a
+	// shared class would hide which one happened.
+	FailureInputBudget FailureClass = "input_budget"
+	FailurePanic       FailureClass = "panic"
+	FailureUnknown     FailureClass = "unknown"
 )
 
 // valid reports whether c is one of the fixed item failure classes.
 func (c FailureClass) valid() bool {
 	switch c {
 	case FailureProvider, FailureTimeout, FailureCancelled, FailureConfiguration,
-		FailureInput, FailureBudget, FailurePanic, FailureUnknown:
+		FailureInput, FailureBudget, FailureInputBudget, FailurePanic, FailureUnknown:
 		return true
 	default:
 		return false
