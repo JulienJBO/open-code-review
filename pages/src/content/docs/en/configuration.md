@@ -343,6 +343,36 @@ model's **output** cap (`MAX_COMPLETION_TOKENS`, `16384` in both templates)
 and of `--max-tokens-budget`, which caps total token use for a whole run.
 Restore the embedded default with `ocr config unset max_tokens`.
 
+### Per-request input ceiling
+
+Providers price input per request, and a price cliff sits at a specific token
+count: past it, the same tokens cost several times more. `--max-tokens` bounds
+the conversation a group may build, and `--max-tokens-budget` bounds a whole
+run — neither means "never send a request bigger than N".
+
+```bash
+ocr review --max-request-input-tokens 32000 --request-token-safety-margin 0.90
+```
+
+The ceiling applies to **one** request. Just before every HTTP call, OCR
+estimates the full serialized input — messages, tool calls and results, tool
+definitions and their JSON schemas, and framing — and refuses to send anything
+above the limit. A refusal sends nothing at all and is reported as an item
+failed with classification `input_budget`; the main task gets one compression
+attempt and one retry first, because compression is the safe reduction it
+already knows.
+
+The estimate uses OCR's tokenizer, which under-counts when the provider's
+differs. `--request-token-safety-margin` (default `0.9`) is the share of the
+ceiling a request may spend, and absorbs that gap: `--max-request-input-tokens
+32000` with the default margin holds requests to 28 800 estimated tokens while
+32 000 stays the business threshold you configured.
+
+Set `OCR_RAW_LOGGING=1` to record one decision line per request — task type,
+estimate, limits, decision, and the provider's own `prompt_tokens` once it
+answers — next to the captured exchange, so estimation drift is measurable
+rather than assumed.
+
 ### Review effort
 
 `effort` sets how many review rounds each subtask gets: `low` = 1,

@@ -1232,6 +1232,12 @@ func classifyItemError(err error) (session.FailureClass, string) {
 	case errors.Is(err, errMainTaskEmpty):
 		return session.FailureConfiguration, "review template main_task is empty"
 	default:
+		// The per-request input guard refuses before any HTTP call, so this is
+		// not a provider fault: reporting it as one would send the operator
+		// looking at a provider that never received anything.
+		if _, ok := llm.AsRequestInputBudgetError(err); ok {
+			return session.FailureInputBudget, "request input budget exceeded; no request was sent"
+		}
 		return session.FailureProvider, "provider or subtask request failed"
 	}
 }

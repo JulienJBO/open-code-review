@@ -960,6 +960,10 @@ func TestClassifyItemError(t *testing.T) {
 		{"main_task_empty", errMainTaskEmpty, session.FailureConfiguration},
 		{"main_task_empty_wrapped", fmt.Errorf("subtask %s: %w", secret, errMainTaskEmpty), session.FailureConfiguration},
 		{"default_provider", errors.New(secret), session.FailureProvider},
+		// The guard refuses before any HTTP call: calling it a provider fault
+		// would point the operator at a provider that received nothing.
+		{"input_budget", &llm.RequestInputBudgetError{EstimatedInputTokens: 41000, EffectiveLimitTokens: 28800}, session.FailureInputBudget},
+		{"input_budget_wrapped", fmt.Errorf("review %s: %w", secret, &llm.RequestInputBudgetError{EstimatedInputTokens: 41000, EffectiveLimitTokens: 28800}), session.FailureInputBudget},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			class, reason := classifyItemError(tc.err)
