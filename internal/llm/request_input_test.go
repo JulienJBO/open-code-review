@@ -179,9 +179,11 @@ func TestRequestInputGuard_RefusesWithoutCallingInner(t *testing.T) {
 // observed data — the table documents that each family is covered rather than
 // proving per-family code exists.
 func TestRequestInputGuard_RefusesEveryTaskFamily(t *testing.T) {
+	// memory_compression_task is absent on purpose: it is the reduction path
+	// and is exempt by contract (TestRequestInputGuard_MemoryCompressionIsExemptButCounted).
 	families := []string{
 		"main_task", "plan_task", "review_filter_task",
-		"memory_compression_task", "re_location_task", "grouping_task",
+		"re_location_task", "grouping_task",
 	}
 	for _, family := range families {
 		t.Run(family, func(t *testing.T) {
@@ -191,9 +193,7 @@ func TestRequestInputGuard_RefusesEveryTaskFamily(t *testing.T) {
 				RequestInputBudget{ProviderLimitTokens: 1000},
 				WithRequestInputEstimator(fixedEstimator(5000)),
 				WithRequestInputSink(RequestInputSinkFunc(func(r RequestInputRecord) { records = append(records, r) })))
-			ctx := WithRequestMeta(context.Background(), RequestMeta{
-				Model: "test-model", FilePath: "a.go", TaskType: family, RequestNo: 1,
-			})
+			ctx := WithRequestMeta(context.Background(), validMeta(family))
 			if _, err := guard.CompletionsWithCtx(ctx, ChatRequest{Messages: messagesOf(1)}); err == nil {
 				t.Fatal("an over-budget request must be refused")
 			}
@@ -202,6 +202,74 @@ func TestRequestInputGuard_RefusesEveryTaskFamily(t *testing.T) {
 			}
 			if len(records) != 1 || records[0].TaskType != family {
 				t.Fatalf("record = %+v, want task type %q", records, family)
+			}
+		})
+	}
+}
+
+// The reduction path must stay reachable: refusing the compression request
+// makes "reduce first, refuse after" impossible in the only case it exists for.
+// validMeta builds a RequestMeta the context accepts. RequestMeta.valid() drops
+// an incomplete identity (RequestNo <= 0 or an empty field), so a test that
+// forgets a field silently measures the unknown-task-type path instead.
+func validMeta(taskType string) RequestMeta {
+	return RequestMeta{Provider: "test", Model: "m", FilePath: "a.go", TaskType: taskType, RequestNo: 1}
+}
+
+func TestRequestInputGuard_MemoryCompressionIsExemptButCounted(t *testing.T) {
+	inner := &countingClient{usage: UsageInfo{PromptTokens: 34000}}
+	var records []RequestInputRecord
+	guard := NewRequestInputGuardClient(inner, "m",
+		RequestInputBudget{ProviderLimitTokens: 32000, SafetyMargin: 0.9, AllowReductionExemption: true},
+		WithRequestInputEstimator(fixedEstimator(35000)),
+		WithRequestInputSink(RequestInputSinkFunc(func(r RequestInputRecord) { records = append(records, r) })))
+
+	ctx := WithRequestMeta(context.Background(), validMeta(TaskTypeMemoryCompression))
+	if _, err := guard.CompletionsWithCtx(ctx, ChatRequest{Messages: messagesOf(2)}); err != nil {
+		t.Fatalf("the compression request must be sent, got %v", err)
+	}
+	if len(inner.requests) != 1 {
+		t.Fatalf("inner calls = %d, want 1", len(inner.requests))
+	}
+	if len(records) == 0 || !records[0].Exempted {
+		t.Fatalf("the exemption must be recorded, got %+v", records)
+	}
+	if records[0].EstimatedInputTokens != 35000 || records[0].Decision != RequestInputAllowed {
+		t.Errorf("record = %+v, want an allowed request counted at its real estimate", records[0])
+	}
+}
+
+// The exemption is for the reduction path only: a plan or filter request has no
+// local reduction, so it stays held to the ceiling.
+// Default is strict: without the opt-in, compression is held to the ceiling
+// like everything else, because the cliff is the guarantee.
+func TestRequestInputGuard_CompressionIsStrictByDefault(t *testing.T) {
+	inner := &countingClient{}
+	guard := NewRequestInputGuardClient(inner, "m",
+		RequestInputBudget{ProviderLimitTokens: 32000, SafetyMargin: 0.9},
+		WithRequestInputEstimator(fixedEstimator(35000)))
+	ctx := WithRequestMeta(context.Background(), validMeta(TaskTypeMemoryCompression))
+	if _, err := guard.CompletionsWithCtx(ctx, ChatRequest{Messages: messagesOf(1)}); err == nil {
+		t.Fatal("compression must be held to the ceiling unless the operator opts in")
+	}
+	if len(inner.requests) != 0 {
+		t.Fatalf("inner calls = %d, want 0", len(inner.requests))
+	}
+}
+
+func TestRequestInputGuard_ExemptionDoesNotLeakToOtherFamilies(t *testing.T) {
+	for _, family := range []string{"main_task", "plan_task", "review_filter_task", TaskTypeUnknown} {
+		t.Run(family, func(t *testing.T) {
+			inner := &countingClient{}
+			guard := NewRequestInputGuardClient(inner, "m",
+				RequestInputBudget{ProviderLimitTokens: 32000, SafetyMargin: 0.9, AllowReductionExemption: true},
+				WithRequestInputEstimator(fixedEstimator(35000)))
+			ctx := WithRequestMeta(context.Background(), validMeta(family))
+			if _, err := guard.CompletionsWithCtx(ctx, ChatRequest{Messages: messagesOf(1)}); err == nil {
+				t.Fatalf("%s must still be refused", family)
+			}
+			if len(inner.requests) != 0 {
+				t.Fatalf("inner calls = %d, want 0", len(inner.requests))
 			}
 		})
 	}

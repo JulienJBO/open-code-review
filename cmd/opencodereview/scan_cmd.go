@@ -49,9 +49,12 @@ type scanOptions struct {
 	// input ceiling; see reviewOptions for why it is a third notion.
 	maxRequestInputTokens    int
 	requestTokenSafetyMargin float64
-	provider                 string
-	model                    string
-	resume                   string
+	// allowInputBudgetReduction trades the economic guarantee for review
+	// coverage; see llm.TaskTypeMemoryCompression.
+	allowInputBudgetReduction bool
+	provider                  string
+	model                     string
+	resume                    string
 }
 
 var scanOpts scanOptions
@@ -170,7 +173,7 @@ func executeScan(opts scanOptions) (retErr error) {
 		return err
 	}
 
-	inputBudget, err := requestInputBudget(opts.maxRequestInputTokens, opts.requestTokenSafetyMargin)
+	inputBudget, err := requestInputBudget(opts.maxRequestInputTokens, opts.requestTokenSafetyMargin, opts.allowInputBudgetReduction)
 	if err != nil {
 		return err
 	}

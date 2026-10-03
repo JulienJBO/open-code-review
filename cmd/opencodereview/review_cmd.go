@@ -56,9 +56,12 @@ type reviewOptions struct {
 	// requestTokenSafetyMargin is the share of that ceiling requests may
 	// spend, absorbing the gap between our tokenizer and the provider's.
 	requestTokenSafetyMargin float64
-	effort                   string
-	noFilter                 bool
-	preview                  bool
+	// allowInputBudgetReduction trades the economic guarantee for review
+	// coverage; see llm.TaskTypeMemoryCompression.
+	allowInputBudgetReduction bool
+	effort                    string
+	noFilter                  bool
+	preview                   bool
 }
 
 var reviewOpts reviewOptions
@@ -168,7 +171,7 @@ func executeReviewContext(ctx context.Context, opts reviewOptions) (retErr error
 		return err
 	}
 
-	inputBudget, err := requestInputBudget(opts.maxRequestInputTokens, opts.requestTokenSafetyMargin)
+	inputBudget, err := requestInputBudget(opts.maxRequestInputTokens, opts.requestTokenSafetyMargin, opts.allowInputBudgetReduction)
 	if err != nil {
 		return err
 	}

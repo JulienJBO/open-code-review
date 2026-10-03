@@ -39,6 +39,22 @@ const RequestInputBudgetExceededCause = "request_input_budget_exceeded"
 // legitimately have none.
 const TaskTypeUnknown = "unknown"
 
+// TaskTypeMemoryCompression is the one request that MAY be sent above the
+// ceiling, and only when the operator opts in.
+//
+// "Reduce first, refuse after" needs the reduction itself to go out: the
+// compression prompt embeds the conversation being compressed, so when the
+// conversation is what crossed the ceiling, the compression request crosses it
+// too. Refusing it makes the fallback structurally impossible and turns every
+// over-budget conversation into a hard failure instead of a reduced one.
+//
+// It is opt-in because it is an economic trade-off, not a free fix. Measured on
+// a 5-diff corpus: the strict guard sends 0 requests over the cliff and
+// completes 8/15 items; the exempted compression completes 10/15 but lets 1
+// request cross. A hard cap exists to bound spend, so the strict behaviour is
+// the default and buying coverage back is a deliberate choice.
+const TaskTypeMemoryCompression = "memory_compression_task"
+
 // RequestInputBudget is the per-request input ceiling. It is deliberately not
 // derived from the per-group prompt ceiling or from the run budget: those
 // bound different things (context selection, aggregate spend) and none of them
@@ -52,6 +68,10 @@ type RequestInputBudget struct {
 	// SafetyMargin is the share of ProviderLimitTokens the guard may spend,
 	// in (0, 1]. Zero means DefaultRequestInputSafetyMargin.
 	SafetyMargin float64
+	// AllowReductionExemption lets the memory-compression request exceed the
+	// ceiling, so that "reduce first, refuse after" stays reachable. It costs
+	// the economic guarantee: that request may cross the provider cliff.
+	AllowReductionExemption bool
 }
 
 // WithDefaults returns b with an unset safety margin replaced by the default.
@@ -214,7 +234,11 @@ type RequestInputRecord struct {
 	SafetyMargin         float64 `json:"safety_margin,omitempty"`
 	MessageCount         int     `json:"message_count"`
 	ToolDefinitionCount  int     `json:"tool_definition_count"`
-	ProviderPromptTokens int     `json:"provider_prompt_tokens,omitempty"`
+	// Exempted marks a request sent despite an estimate above the ceiling,
+	// because refusing it would disable the reduction path it belongs to.
+	Exempted bool `json:"exempted,omitempty"`
+
+	ProviderPromptTokens int `json:"provider_prompt_tokens,omitempty"`
 	// EstimateDeltaTokens is ProviderPromptTokens - EstimatedInputTokens.
 	// Positive means the provider counted more than the guard did, which is
 	// the direction that crosses a price cliff unnoticed.
@@ -356,6 +380,20 @@ func (g *requestInputGuardClient) CompletionsWithCtx(ctx context.Context, req Ch
 		SafetyMargin:         g.budget.SafetyMargin,
 		MessageCount:         len(req.Messages),
 		ToolDefinitionCount:  len(req.Tools),
+	}
+
+	if estimated > limit && g.budget.AllowReductionExemption && taskType == TaskTypeMemoryCompression {
+		// Counted, recorded, sent: the reduction path stays available.
+		rec.Decision = RequestInputAllowed
+		rec.Exempted = true
+		g.emit(rec)
+		resp, err := g.inner.CompletionsWithCtx(ctx, req)
+		if err == nil && resp != nil && resp.Usage != nil {
+			rec.ProviderPromptTokens = int(resp.Usage.PromptTokens)
+			rec.EstimateDeltaTokens = rec.ProviderPromptTokens - estimated
+			g.emit(rec)
+		}
+		return resp, err
 	}
 
 	if estimated > limit {
