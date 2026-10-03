@@ -11,6 +11,7 @@ import (
 
 	"github.com/alibaba/open-code-review/internal/chunk"
 	"github.com/alibaba/open-code-review/internal/config/template"
+	"github.com/alibaba/open-code-review/internal/llm"
 	"github.com/alibaba/open-code-review/internal/llmloop"
 	"github.com/alibaba/open-code-review/internal/model"
 	"github.com/alibaba/open-code-review/internal/tool"
@@ -252,4 +253,42 @@ func runnerStats(t *testing.T, a *Agent) llmloop.RunContextStats {
 		t.Fatal("agent has no runner")
 	}
 	return a.runner.ContextStats()
+}
+
+func TestPlanReviewContext_TheAssembledRequestStaysUnderTheDerivedBound(t *testing.T) {
+	// The end-to-end bound the whole design rests on: after sharding, the first
+	// request - system prompt, manifest, whatever else the template carries -
+	// must fit the provider ceiling with the reserves left intact. Sharding that
+	// merely moves the overflow from one field to another has failed.
+	a := newContextAgent(t)
+	a.args.Template.MainTask = templateConversation(
+		"system {{system_rule}} change files {{change_files}}\n{{diffs}}\nplan {{plan_guidance}}")
+
+	diffs := []model.Diff{sizedDiff("a.go", 900), sizedDiff("b.go", 700), sizedDiff("c.go", 500)}
+	budget := a.contextBudget(a.measureFixedOverhead("a long system rule", "a.go\nb.go\nc.go", "a plan", ""))
+
+	rc := a.planReviewContext(context.Background(), "g1", diffs, budget)
+	if !rc.Sharded {
+		t.Fatal("fixture should straddle the threshold")
+	}
+
+	messages := a.buildMainTaskMessages("a long system rule", "a.go\nb.go\nc.go", rc.Text, "a plan", "")
+	raw := llmloop.CountMessagesTokens(messages)
+
+	// request_limit = fixed_overhead + the assembled context must leave the
+	// conversation and output reserves intact.
+	reserves := llmloop.PromptTokenLimit(a.args.Template.MaxTokens) - budget.FixedOverhead - budget.Chunk()
+	if raw > budget.FixedOverhead+budget.Chunk() {
+		t.Errorf("assembled request is %d tokens, above the %d the derived budget allows for it",
+			raw, budget.FixedOverhead+budget.Chunk())
+	}
+	if raw >= llmloop.PromptTokenLimit(a.args.Template.MaxTokens)-reserves {
+		t.Errorf("assembled request %d has eaten into the %d tokens reserved for the conversation and the reply", raw, reserves)
+	}
+
+	// And it is far smaller than the change it replaced: that is the saving.
+	inline := buildConcatenatedDiffs(diffs)
+	if got, want := raw*4, llm.CountTokens(inline); got >= want {
+		t.Errorf("sharded prompt is %d tokens against an inline %d: no saving was made", got, want)
+	}
 }
