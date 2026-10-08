@@ -6,6 +6,7 @@ package chunk
 import (
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -172,6 +173,30 @@ func TestStore_FallbackChunksAPathOnFirstRead(t *testing.T) {
 	if len(s.ChunksForPath("absent.go")) != 0 {
 		t.Error("an unresolvable path must stay empty")
 	}
+}
+
+func TestStore_ResolvePathConcurrentWithAdd(t *testing.T) {
+	s := NewStore(400)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		<-start
+		for i := 0; i < 1000; i++ {
+			path := fmt.Sprintf("pkg/%d.go", i)
+			s.Add("g", path, []Chunk{{ID: fmt.Sprintf("chunk-%d", i), Path: path}})
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		for i := 0; i < 1000; i++ {
+			s.ResolvePath(fmt.Sprintf("chunk-%d", i))
+		}
+	}()
+	close(start)
+	wg.Wait()
 }
 
 func TestStore_ConcurrentFetchAccounting(t *testing.T) {

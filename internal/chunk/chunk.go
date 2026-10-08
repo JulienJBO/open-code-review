@@ -149,6 +149,7 @@ func Split(path, diffText string, opts Options) []Chunk {
 	}
 	for i := range chunks {
 		chunks[i].Index = i
+		chunks[i].Total = len(chunks)
 	}
 	return chunks
 }
@@ -263,7 +264,7 @@ func windowSpans(lines []string, h span, budget, overlap int) []span {
 			end++
 		}
 		s := span{start: pos, end: end, kind: KindWindow}
-		if pos == 0 {
+		if pos == h.start {
 			s.header = h.header
 		}
 		if end == pos+1 && tokens > budget {

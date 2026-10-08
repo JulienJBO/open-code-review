@@ -419,11 +419,11 @@ func (s *Store) MarkSkippedInGroup(group string, ids []string, cause string) {
 // prefixed and paths are not, but a path that also happens to be a registered
 // id is treated as a path - the model reaches for a path first.
 func (s *Store) ResolvePath(ref string) []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	if _, ok := s.entries[ref]; ok {
 		return []string{ref}
 	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
 	ids := s.byPath[ref]
 	out := make([]string, len(ids))
 	copy(out, ids)

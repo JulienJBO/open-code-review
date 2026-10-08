@@ -5,11 +5,20 @@ package tool
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/alibaba/open-code-review/internal/chunk"
 )
+
+func TestStringSliceArgTrimsPaths(t *testing.T) {
+	got := stringSliceArg(map[string]any{"path_array": []any{" src/a.go ", "", "  ", "src/b.go"}}, "path_array")
+	want := []string{"src/a.go", "src/b.go"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("stringSliceArg = %#v, want %#v", got, want)
+	}
+}
 
 func TestNewDiffMap_DefensiveCopy(t *testing.T) {
 	orig := map[string]string{"a.go": "diff a"}
@@ -206,7 +215,7 @@ func TestFileReadDiff_MaxTokensOnlyLowersTheBudget(t *testing.T) {
 	lower, _ := p.Execute(context.Background(), map[string]any{
 		"path_array": []any{"a.go"}, "max_tokens": 300,
 	})
-	if !strings.Contains(lower, "The diff is NOT fully read") {
+	if !strings.Contains(lower, "read budget") && !strings.Contains(lower, "The diff is NOT fully read") {
 		t.Error("a smaller max_tokens must actually bound the read")
 	}
 
@@ -214,8 +223,8 @@ func TestFileReadDiff_MaxTokensOnlyLowersTheBudget(t *testing.T) {
 	higher, _ := p.Execute(context.Background(), map[string]any{
 		"path_array": []any{"a.go"}, "max_tokens": 999999,
 	})
-	if higher != lower && strings.Contains(higher, "NOT fully read") && !strings.Contains(lower, "NOT fully read") {
-		t.Error("max_tokens must never raise the run's read budget")
+	if higher == lower {
+		t.Error("a request for more tokens should still be capped at the run's read budget")
 	}
 	if got := int(p.readBudget.Load()); got != 2000 {
 		t.Errorf("read budget = %d, want it unchanged at 2000", got)
@@ -232,19 +241,39 @@ func TestFileReadDiff_RefusesWithoutABudget(t *testing.T) {
 	}
 }
 
-func TestFileReadDiff_LowerReadBudgetOnlyTightens(t *testing.T) {
-	p := NewFileReadDiff(NewDiffMap(nil))
-	p.LowerReadBudget(1000)
-	if got := int(p.readBudget.Load()); got != 1000 {
-		t.Fatalf("first budget must be set, got %d", got)
+func TestFileReadDiff_MaxTokensCapsEveryAccessShape(t *testing.T) {
+	p, store := boundedProvider(t, 10000)
+	chunkID := store.ChunksOfGroup("g1")[0].ID
+	for _, args := range []map[string]any{
+		{"chunk_id": chunkID, "max_tokens": 1},
+		{"path": "a.go", "max_tokens": 1},
+		{"path_array": []any{"a.go"}, "max_tokens": 1},
+	} {
+		got, _ := p.Execute(context.Background(), args)
+		if strings.Contains(got, "==== CHUNK "+chunkID) || strings.Contains(got, "<chunk_index") {
+			t.Errorf("max_tokens must cap every access shape, args=%v output=%q", args, got)
+		}
 	}
-	p.LowerReadBudget(400)
-	if got := int(p.readBudget.Load()); got != 400 {
-		t.Errorf("a smaller budget must win, got %d", got)
+}
+
+func TestFileReadDiff_GroupBudgetsAreIndependent(t *testing.T) {
+	p, store := boundedProvider(t, 10000)
+	chunkID := store.ChunksOfGroup("g1")[0].ID
+	args := map[string]any{"path_array": []any{"a.go"}}
+
+	low := WithFileReadDiffBudget(context.Background(), 1)
+	got, _ := p.Execute(low, args)
+	if strings.Contains(got, "==== CHUNK "+chunkID) || !strings.Contains(got, chunkID) {
+		t.Fatalf("low-budget group must be told its chunk was not served: %q", got)
 	}
-	p.LowerReadBudget(900)
-	if got := int(p.readBudget.Load()); got != 400 {
-		t.Errorf("a larger budget must not widen an established one, got %d", got)
+
+	high := WithFileReadDiffBudget(context.Background(), 10000)
+	got, _ = p.Execute(high, args)
+	if !strings.Contains(got, "==== CHUNK "+chunkID) {
+		t.Fatalf("a small budget in another group must not lower this group's read ceiling: %q", got)
+	}
+	if got := int(p.readBudget.Load()); got != 10000 {
+		t.Errorf("group-scoped budgets must not mutate the provider default, got %d", got)
 	}
 }
 

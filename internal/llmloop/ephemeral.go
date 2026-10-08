@@ -67,7 +67,6 @@ type contextLedger struct {
 
 	mu       sync.Mutex
 	sent     map[string]int
-	tokens   map[string]int
 	rawFirst int64
 	receipts int64
 	maxReq   int64
@@ -84,7 +83,6 @@ func newContextLedger(threshold int) *contextLedger {
 	return &contextLedger{
 		threshold: threshold,
 		sent:      make(map[string]int),
-		tokens:    make(map[string]int),
 	}
 }
 
@@ -121,9 +119,8 @@ func (l *contextLedger) prepare(messages []llm.Message) []llm.Message {
 
 		l.mu.Lock()
 		seen := l.sent[m.ToolCallID]
-		l.tokens[m.ToolCallID] = tokens
+		l.sent[m.ToolCallID] = seen + 1
 		if seen == 0 {
-			l.sent[m.ToolCallID] = 1
 			rawThisRequest += int64(tokens)
 		} else {
 			m.Content = receiptFor(m.ToolCallID, tokens, seen+1)
@@ -172,7 +169,6 @@ func (l *contextLedger) fold(r *Runner) {
 			break
 		}
 	}
-	atomic.StoreInt64(&r.lastEstimatedRequestTokens, s.LastEstimatedRequestTokens)
 }
 
 // receiptFor renders the compact stand-in for a payload already read. The

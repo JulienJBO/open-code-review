@@ -141,6 +141,20 @@ func TestLedger_TwoCallsAreTrackedSeparately(t *testing.T) {
 	}
 }
 
+func TestLedger_ReceiptReportsActualNumberOfRequests(t *testing.T) {
+	l := newContextLedger(MinContextResultThreshold)
+	msgs := toolPair("call_repeat", bigResult())
+	l.prepare(msgs) // first request carries raw content
+	second := l.prepare(msgs)
+	third := l.prepare(msgs)
+	if got := second[1].ExtractText(); !strings.Contains(got, "sent 2 times") {
+		t.Fatalf("second request receipt = %q, want sent 2 times", got)
+	}
+	if got := third[1].ExtractText(); !strings.Contains(got, "sent 3 times") {
+		t.Fatalf("third request receipt = %q, want sent 3 times", got)
+	}
+}
+
 func TestLedger_ThresholdFloorAndDefault(t *testing.T) {
 	if got := newContextLedger(1).threshold; got != MinContextResultThreshold {
 		t.Errorf("a tiny threshold must floor, got %d", got)
@@ -197,6 +211,22 @@ func TestRunner_ContextStatsFoldAcrossConversations(t *testing.T) {
 	}
 	if st.MaxEstimatedRequestTokens < st.LastEstimatedRequestTokens {
 		t.Error("the run-wide maximum must be at least its last value")
+	}
+}
+
+func TestRunner_LastRequestEstimateIsNotOverwrittenByLateLedgerFold(t *testing.T) {
+	r := NewRunner(Deps{})
+	older := newContextLedger(MinContextResultThreshold)
+	older.prepare(toolPair("older", bigResult()))
+	older.fold(r)
+
+	r.recordRequestEstimate(777)
+	newer := newContextLedger(MinContextResultThreshold)
+	newer.prepare(toolPair("newer", bigResult()))
+	newer.fold(r)
+
+	if got := r.ContextStats().LastEstimatedRequestTokens; got != 777 {
+		t.Fatalf("LastEstimatedRequestTokens = %d after a late ledger fold, want most recently dispatched estimate 777", got)
 	}
 }
 

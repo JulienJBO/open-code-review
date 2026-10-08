@@ -242,10 +242,8 @@ func New(args Args) *Agent {
 	a := &Agent{
 		args:    args,
 		session: args.Session,
-		// The chunk store is seeded with a placeholder budget; each group's
-		// plan replaces it with the budget derived from that group's rendered
-		// prompt (see Agent.planReviewContext). Reads are served with the
-		// budget in force when the group started.
+		// The chunk store's fallback budget is closed until its caller provides
+		// a group-scoped read ceiling through the tool-call context.
 		chunks: chunk.NewStore(0),
 	}
 	a.initManifest()
@@ -974,6 +972,14 @@ func reviewItemFingerprint(mode string, d model.Diff) string {
 // a resume. The resolved commit SHAs, source-artifact and config hashes, and
 // repository identity are filled by a later phase; the mandatory input.mode is
 // set here so the manifest is always constructible.
+func ticketContextIdentity(background string) (string, int) {
+	if background == "" {
+		return "", 0
+	}
+	sum := sha256.Sum256([]byte(background))
+	return hex.EncodeToString(sum[:]), len([]byte(background))
+}
+
 func (a *Agent) initManifest() {
 	b := a.session.Manifest()
 	if b == nil {
@@ -983,6 +989,7 @@ func (a *Agent) initManifest() {
 		b.SetParentRunID(parent)
 	}
 	b.SetInput(a.manifestInput())
+	backgroundHash, backgroundBytes := ticketContextIdentity(a.args.Background)
 	b.SetExecution(session.ManifestExecution{
 		OCRVersion:            llm.AppVersion,
 		Provider:              a.args.Provider,
@@ -990,6 +997,8 @@ func (a *Agent) initManifest() {
 		ConfiguredConcurrency: a.args.MaxConcurrency,
 		RuleConfigSHA256:      a.ruleConfigSHA256(),
 		RuntimeConfigSHA256:   a.runtimeConfigSHA256(),
+		TicketContextSHA256:   backgroundHash,
+		TicketContextBytes:    backgroundBytes,
 	})
 }
 
@@ -1487,6 +1496,7 @@ func (a *Agent) executeGroupSubtask(ctx context.Context, g FileGroup) (bool, *su
 	// round 1 would name a unit the round-2 manifest never shows.
 	budget := a.contextBudget(a.measureFixedOverhead(rule, changeFilesExcludingGroup, planResult, ""))
 	rc := a.planReviewContext(ctx, groupKey, g.Diffs, budget)
+	groupCtx := tool.WithFileReadDiffBudget(ctx, budget.Read())
 	coverageFolded := false
 	defer func() { a.finalizeContextCoverage(ctx, groupKey, rc, &coverageFolded) }()
 
@@ -1523,7 +1533,7 @@ func (a *Agent) executeGroupSubtask(ctx context.Context, g FileGroup) (bool, *su
 		}
 
 		mainCompleted, mainStop, err := func() (bool, llmloop.MainLoopStop, error) {
-			ctx, mainSpan := telemetry.StartSpan(ctx, "main.loop")
+			ctx, mainSpan := telemetry.StartSpan(groupCtx, "main.loop")
 			defer mainSpan.End()
 			telemetry.SetAttr(mainSpan, "group.label", groupKey)
 			telemetry.SetAttr(mainSpan, "round", round)
@@ -1549,7 +1559,7 @@ func (a *Agent) executeGroupSubtask(ctx context.Context, g FileGroup) (bool, *su
 		if a.args.CommentWorkerPool != nil {
 			a.args.CommentWorkerPool.AwaitKey(groupKey)
 		}
-		a.executeGroupReviewFilter(ctx, g, baseline, budget)
+		a.executeGroupReviewFilter(groupCtx, g, baseline, budget)
 
 		// Compute newly confirmed comments from this round.
 		var newlyConfirmed []model.LlmComment

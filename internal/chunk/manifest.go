@@ -3,7 +3,10 @@
 
 package chunk
 
-import "strings"
+import (
+	"encoding/json"
+	"strings"
+)
 
 // Manifest is the review context of one group: the ordered chunks the model
 // must read, plus how many packs they fall into. It replaces an inlined diff
@@ -101,17 +104,30 @@ func renderDeferred(deferred []Chunk) string {
 	b.WriteString("  <deferred note=\"")
 	b.WriteString(itoa(len(deferred)))
 	b.WriteString(` chunk(s) omitted to stay within the manifest budget; this is NOT full coverage.">` + "\n")
-	for i, c := range deferred {
-		if i >= 10 {
-			b.WriteString("    ... and ")
-			b.WriteString(itoa(len(deferred) - i))
-			b.WriteString(" more, listed per file by file_read_diff {\"path\": \"")
-			b.WriteString(escapeAttr(c.Path))
-			b.WriteString("\"}\n")
-			break
-		}
+	listed := len(deferred)
+	if listed > readNoticeLimit {
+		listed = readNoticeLimit
+	}
+	for _, c := range deferred[:listed] {
 		b.WriteString(IndexLine(c))
 		b.WriteString("\n")
+	}
+	if listed < len(deferred) {
+		paths := make([]string, 0, len(deferred))
+		seen := make(map[string]struct{}, len(deferred))
+		for _, c := range deferred {
+			if _, ok := seen[c.Path]; ok {
+				continue
+			}
+			seen[c.Path] = struct{}{}
+			paths = append(paths, c.Path)
+		}
+		encodedPaths, _ := json.Marshal(paths)
+		b.WriteString("    ... and ")
+		b.WriteString(itoa(len(deferred) - listed))
+		b.WriteString(" more; read all deferred paths with file_read_diff {\"path_array\": ")
+		b.Write(encodedPaths)
+		b.WriteString("}\n")
 	}
 	b.WriteString("  </deferred>\n")
 	return b.String()

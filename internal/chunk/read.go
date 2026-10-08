@@ -16,12 +16,25 @@ const readNoticeLimit = 10
 // message naming the miss rather than an error, matching how the other read
 // tools report: the model can correct itself from the text.
 func (s *Store) Fetch(id string) string {
+	return s.fetch(id, 0)
+}
+
+// FetchWithinBudget serves a chunk only when its complete rendered body fits.
+func (s *Store) FetchWithinBudget(id string, budget int) string {
+	return s.fetch(id, budget)
+}
+
+func (s *Store) fetch(id string, budget int) string {
 	c, ok := s.Chunk(id)
 	if !ok {
 		return "Error: unknown chunk id \"" + id + "\". Use file_read_diff {\"path\": \"<file>\"} to list the chunk ids of a file."
 	}
+	body := chunkBody(c)
+	if budget > 0 && countTokens(body) > budget {
+		return "Error: chunk \"" + id + "\" was not served because its rendered body exceeds the " + itoa(budget) + "-token read budget. The diff is NOT fully read."
+	}
 	s.RecordFetch(id)
-	return chunkBody(c)
+	return body
 }
 
 // FetchPaths serves the chunks of several paths, in order, stopping when the
@@ -56,9 +69,8 @@ func (s *Store) servePaths(paths []string, budget int, record bool) string {
 			}
 			seen[c.ID] = true
 			body := chunkBody(c)
-			// An oversized chunk is served whole: it is the one unit that
-			// cannot be shrunk, and cutting it would lose content.
-			if served > 0 && used+c.Tokens > budget {
+			bodyTokens := countTokens(body)
+			if used+bodyTokens > budget {
 				remaining++
 				firstRemaining = appendBounded(firstRemaining, c.ID)
 				continue
@@ -67,7 +79,7 @@ func (s *Store) servePaths(paths []string, budget int, record bool) string {
 				s.RecordFetch(c.ID)
 			}
 			b.WriteString(body)
-			used += c.Tokens
+			used += bodyTokens
 			served++
 		}
 	}
@@ -80,7 +92,7 @@ func (s *Store) servePaths(paths []string, budget int, record bool) string {
 	}
 
 	if served == 0 {
-		return "Error: the requested diff exceeds the read budget of " + itoa(budget) +
+		return "Error: the requested diff was not served because it exceeds the read budget of " + itoa(budget) +
 			" tokens; fetch it with file_read_diff {\"chunk_id\": \"...\"}. First chunk ids: " +
 			strings.Join(firstRemaining, ", ")
 	}
@@ -93,15 +105,49 @@ func (s *Store) servePaths(paths []string, budget int, record bool) string {
 // without content. It is how the model discovers the ids of a file whose chunks
 // the manifest could not afford to list.
 func (s *Store) ListPath(path string) string {
+	return s.ListPathWithinBudget(path, 0)
+}
+
+// ListPathWithinBudget keeps chunk discovery bounded while naming omitted work.
+func (s *Store) ListPathWithinBudget(path string, budget int) string {
 	chunks := s.ChunksForPath(path)
 	if len(chunks) == 0 {
 		return "Error: no chunk registered for path \"" + path + "\""
 	}
+	header := "<chunk_index path=\"" + escapeAttr(path) + "\" count=\"" + itoa(len(chunks)) + "\">\n"
+	if budget > 0 && countTokens(header) > budget {
+		return "Error: chunk index for path \"" + path + "\" was not served because its header exceeds the " + itoa(budget) + "-token read budget."
+	}
 	var b strings.Builder
-	b.WriteString("<chunk_index path=\"" + escapeAttr(path) + "\" count=\"" + itoa(len(chunks)) + "\">\n")
-	for _, c := range chunks {
-		b.WriteString(IndexLine(c))
-		b.WriteString("\n")
+	b.WriteString(header)
+	used := countTokens(header)
+	remaining := 0
+	var omitted []string
+	for i, c := range chunks {
+		line := IndexLine(c) + "\n"
+		if budget > 0 && used+countTokens(line) > budget {
+			remaining = len(chunks) - i
+			for _, rest := range chunks[i:min(i+readNoticeLimit, len(chunks))] {
+				omitted = append(omitted, rest.ID)
+			}
+			break
+		}
+		b.WriteString(line)
+		used += countTokens(line)
+	}
+	if remaining > 0 {
+		b.WriteString("[chunk index bounded] ")
+		b.WriteString(itoa(remaining))
+		b.WriteString(" chunk id(s) not listed; use file_read_diff {\"path_array\": [\"")
+		b.WriteString(escapeAttr(path))
+		b.WriteString("\"]} to read the path under the same budget. Omitted ids: ")
+		b.WriteString(strings.Join(omitted, ", "))
+		if remaining > len(omitted) {
+			b.WriteString(", and ")
+			b.WriteString(itoa(remaining - len(omitted)))
+			b.WriteString(" more")
+		}
+		b.WriteString(". The diff is NOT fully read.\n")
 	}
 	b.WriteString("</chunk_index>\n")
 	return b.String()

@@ -133,12 +133,11 @@ func TestInjectDiffMap(t *testing.T) {
 	}
 
 	a.injectDiffMap()
-	// injectDiffMap deliberately leaves the read budget closed: a group lowers
-	// it as it plans its own context. This test exercises the map, so it
-	// opens the budget the way a group would.
-	a.lowerReadBudget(chunk.DeriveBudget(8000, 0, 1000))
+	// injectDiffMap leaves the fallback budget closed; a group supplies its
+	// own read ceiling through the tool-call context.
+	ctx := tool.WithFileReadDiffBudget(context.Background(), chunk.DeriveBudget(8000, 0, 1000).Read())
 
-	result, err := frd.Execute(context.Background(), map[string]any{
+	result, err := frd.Execute(ctx, map[string]any{
 		"path_array": []any{"main.go"},
 	})
 	if err != nil {
@@ -148,7 +147,7 @@ func TestInjectDiffMap(t *testing.T) {
 		t.Errorf("DiffMap did not contain main.go diff, got: %q", result)
 	}
 
-	result2, _ := frd.Execute(context.Background(), map[string]any{
+	result2, _ := frd.Execute(ctx, map[string]any{
 		"path_array": []any{"deleted.go"},
 	})
 	if !strings.Contains(result2, "not found") {

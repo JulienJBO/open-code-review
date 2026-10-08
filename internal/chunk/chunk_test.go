@@ -216,3 +216,31 @@ func TestSplit_ChunkTokensAreMeasured(t *testing.T) {
 		}
 	}
 }
+
+func TestSplit_TotalMatchesAfterTrailingEmptyChunkIsRemoved(t *testing.T) {
+	text := diffText(4, 20) // diffText ends in a newline, so Split sees an empty final line
+	chunks := Split("pkg/x.go", text, Options{Budget: 300})
+	if len(chunks) < 2 {
+		t.Fatalf("fixture should split, got %d chunks", len(chunks))
+	}
+	for i, c := range chunks {
+		if c.Index != i || c.Total != len(chunks) {
+			t.Errorf("chunk %d has part %d/%d, want %d/%d", i, c.Index+1, c.Total, i+1, len(chunks))
+		}
+	}
+}
+
+func TestSplit_FirstWindowCarriesItsHunkHeader(t *testing.T) {
+	text := "diff --git a/pkg/x.go b/pkg/x.go\nindex abc..def 100644\n--- a/pkg/x.go\n+++ b/pkg/x.go\n@@ -10,1 +10,1 @@ func first()\n" +
+		strings.Repeat("+long changed line with enough words to exceed the small window budget\n", 40)
+	chunks := Split("pkg/x.go", text, Options{Budget: 80})
+	for _, c := range chunks {
+		if c.Kind == KindWindow {
+			if c.HunkHeader != "@@ -10,1 +10,1 @@ func first()" {
+				t.Fatalf("first window HunkHeader = %q, want original hunk header", c.HunkHeader)
+			}
+			return
+		}
+	}
+	t.Fatal("fixture should produce a window")
+}

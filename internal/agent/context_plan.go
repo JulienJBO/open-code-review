@@ -14,7 +14,6 @@ import (
 	"github.com/alibaba/open-code-review/internal/model"
 	"github.com/alibaba/open-code-review/internal/stdout"
 	"github.com/alibaba/open-code-review/internal/telemetry"
-	"github.com/alibaba/open-code-review/internal/tool"
 )
 
 // A group's change context reaches the model one of two ways.
@@ -107,7 +106,6 @@ func (a *Agent) planReviewContext(ctx context.Context, groupKey string, diffs []
 
 	// Tighten the shared read ceiling to this group's budget before its main
 	// loop can issue a read.
-	a.lowerReadBudget(budget)
 
 	fmt.Fprintf(stdout.Writer(), "[ocr] Sharded group %q into %d chunk(s) across %d pack(s) (budget %d tokens)\n",
 		groupKey, len(chunks), m.PackCount, budget.Chunk())
@@ -122,20 +120,6 @@ func (a *Agent) planReviewContext(ctx context.Context, groupKey string, diffs []
 		Text:    manifestPreamble + chunk.RenderManifest(m, budget.Manifest()),
 		Sharded: true,
 		Budget:  budget,
-	}
-}
-
-// lowerReadBudget pushes a group's read ceiling down to the shared read tool.
-// The tool only ever tightens, so a group reading with a budget at least as
-// large as its own; see FileReadDiffProvider.LowerReadBudget.
-func (a *Agent) lowerReadBudget(budget chunk.Budget) {
-	if !budget.Usable() {
-		return
-	}
-	if p, ok := a.args.Tools.Get(tool.FileReadDiff.Name()); ok {
-		if frd, ok := p.(*tool.FileReadDiffProvider); ok {
-			frd.LowerReadBudget(budget.Read())
-		}
 	}
 }
 

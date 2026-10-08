@@ -46,11 +46,8 @@ type FileReadDiffProvider struct {
 	// context fits the budget - in which case reads are chunked on the fly for
 	// this call alone and coverage is not tracked.
 	store atomic.Pointer[chunk.Store]
-	// readBudget is the maximum token count of one result, as an atomic because
-	// concurrent groups lower it as they plan their context and reads happen
-	// from every group's main loop. Zero refuses to serve: a provider that has
-	// not been given a budget fails closed rather than serving the unbounded
-	// read it exists to prevent.
+	// readBudget is the fallback ceiling for callers without a group-scoped
+	// budget. Zero refuses to serve rather than returning an unbounded read.
 	readBudget atomic.Int64
 }
 
@@ -78,26 +75,6 @@ func (p *FileReadDiffProvider) SetContextStore(store *chunk.Store, readBudget in
 	}
 }
 
-// LowerReadBudget tightens the per-read ceiling to tokens when that is smaller
-// than the current one, and sets it when none is in force yet. After that first
-// value it only ever tightens: a read must fit the budget of the group that
-// issued it, and groups are dispatched concurrently, so the smallest budget any
-// group has planned is the only value every group is guaranteed to honour.
-func (p *FileReadDiffProvider) LowerReadBudget(tokens int) {
-	if tokens <= 0 {
-		return
-	}
-	for {
-		cur := p.readBudget.Load()
-		if cur != 0 && int64(tokens) >= cur {
-			return
-		}
-		if p.readBudget.CompareAndSwap(cur, int64(tokens)) {
-			return
-		}
-	}
-}
-
 func (p *FileReadDiffProvider) Tool() Tool { return FileReadDiff }
 
 // Execute serves diff context. Three shapes, in precedence order:
@@ -110,14 +87,14 @@ func (p *FileReadDiffProvider) Tool() Tool { return FileReadDiff }
 //
 // Whatever is not served is named in the result, so a bounded read is never
 // mistaken for the whole change.
-func (p *FileReadDiffProvider) Execute(_ context.Context, args map[string]any) (string, error) {
-	budget := int(p.readBudget.Load())
+func (p *FileReadDiffProvider) Execute(ctx context.Context, args map[string]any) (string, error) {
+	budget := p.requestedBudget(args, p.readBudgetFor(ctx))
 	if id := stringArg(args, "chunk_id"); id != "" {
 		store, ok := p.chunkStoreFor(nil, budget)
 		if !ok {
 			return "Error: unknown chunk id \"" + id + "\". Use file_read_diff {\"path_array\": [\"<path>\"]} to read diff context.", nil
 		}
-		return store.Fetch(id), nil
+		return store.FetchWithinBudget(id, budget), nil
 	}
 
 	path := stringArg(args, "path")
@@ -126,7 +103,7 @@ func (p *FileReadDiffProvider) Execute(_ context.Context, args map[string]any) (
 		if !ok {
 			return "Error: diff not found for the requested path", nil
 		}
-		return store.ListPath(path), nil
+		return store.ListPathWithinBudget(path, budget), nil
 	}
 
 	paths := stringSliceArg(args, "path_array")
@@ -138,12 +115,29 @@ func (p *FileReadDiffProvider) Execute(_ context.Context, args map[string]any) (
 	if !ok {
 		return "Error: diff not found for the requested paths", nil
 	}
-	return store.FetchPaths(paths, p.requestedBudget(args, budget)), nil
+	return store.FetchPaths(paths, budget), nil
 }
 
 // requestedBudget honours a model's max_tokens request only downwards: the read
 // budget is derived from the run's own context budget, and a model asking for
 // more than that would be asking for the unbounded read this provider refuses.
+func (p *FileReadDiffProvider) readBudgetFor(ctx context.Context) int {
+	if budget, ok := ctx.Value(fileReadBudgetKey{}).(int); ok && budget > 0 {
+		return budget
+	}
+	return int(p.readBudget.Load())
+}
+
+type fileReadBudgetKey struct{}
+
+// WithFileReadDiffBudget scopes a group-specific read ceiling to its tool calls.
+func WithFileReadDiffBudget(ctx context.Context, tokens int) context.Context {
+	if tokens <= 0 {
+		return ctx
+	}
+	return context.WithValue(ctx, fileReadBudgetKey{}, tokens)
+}
+
 func (p *FileReadDiffProvider) requestedBudget(args map[string]any, budget int) int {
 	if v, ok := numericArg(args, "max_tokens"); ok && v > 0 && int(v) < budget {
 		return int(v)
@@ -194,7 +188,10 @@ func stringSliceArg(args map[string]any, key string) []string {
 	out := make([]string, 0, len(raw))
 	for _, item := range raw {
 		if s, ok := item.(string); ok {
-			out = append(out, s)
+			s = strings.TrimSpace(s)
+			if s != "" {
+				out = append(out, s)
+			}
 		}
 	}
 	return out

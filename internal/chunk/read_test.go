@@ -4,6 +4,7 @@
 package chunk
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -159,6 +160,36 @@ func TestRenderManifest_StaysBoundedAndSaysWhatItOmitted(t *testing.T) {
 	deferred := out[strings.Index(out, "<deferred"):]
 	if strings.Count(deferred, "<chunk ") > 11 {
 		t.Errorf("deferred block listed %d rows: it must stay bounded", strings.Count(deferred, "<chunk "))
+	}
+}
+
+func TestRenderDeferredNamesEveryPathAfterTheInlineLimit(t *testing.T) {
+	chunks := make([]Chunk, 12)
+	for i := range chunks {
+		chunks[i] = Chunk{ID: fmt.Sprintf("chunk-%d", i), Path: fmt.Sprintf("pkg/file-%d.go", i), Index: 0, Total: 1}
+	}
+	out := renderDeferred(chunks)
+	for i := range chunks {
+		if !strings.Contains(out, chunks[i].Path) {
+			t.Errorf("deferred guidance omitted path %q", chunks[i].Path)
+		}
+	}
+	if !strings.Contains(out, `"path_array"`) {
+		t.Fatalf("multi-file deferred guidance must use path_array, got %q", out)
+	}
+}
+
+func TestFetchPaths_DoesNotExceedBudgetWithRenderedChunkHeaders(t *testing.T) {
+	s := NewStore(400)
+	c := Chunk{ID: "chunk-header-heavy", Path: "pkg/x.go", StartLine: 1, EndLine: 1, Text: "+x", Tokens: countTokens("+x")}
+	s.Add("g", c.Path, []Chunk{c})
+	budget := c.Tokens
+	out := s.FetchPaths([]string{c.Path}, budget)
+	if strings.Contains(out, "==== CHUNK "+c.ID) {
+		t.Fatalf("served chunk body whose rendered header exceeds budget %d: %q", budget, out)
+	}
+	if !strings.Contains(out, c.ID) || !strings.Contains(out, "not served") {
+		t.Fatalf("refusal must name the unserved chunk rather than omit it: %q", out)
 	}
 }
 

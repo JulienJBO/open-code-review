@@ -112,6 +112,18 @@ func TestSourceArtifactSHA256_DedupsByItemID(t *testing.T) {
 	}
 }
 
+func TestTicketContextIdentityIsStableWithoutPersistingContent(t *testing.T) {
+	text := "review the requirement for bounded token accounting"
+	want := sha256.Sum256([]byte(text))
+	gotHash, gotBytes := ticketContextIdentity(text)
+	if gotHash != hex.EncodeToString(want[:]) || gotBytes != len([]byte(text)) {
+		t.Fatalf("ticket context identity = (%q, %d), want SHA256 and %d bytes", gotHash, gotBytes, len([]byte(text)))
+	}
+	if gotHash, gotBytes := ticketContextIdentity(""); gotHash != "" || gotBytes != 0 {
+		t.Fatalf("empty ticket context identity = (%q, %d), want empty", gotHash, gotBytes)
+	}
+}
+
 func TestRuntimeConfigSHA256(t *testing.T) {
 	baseArgs := Args{
 		Model:          "m",

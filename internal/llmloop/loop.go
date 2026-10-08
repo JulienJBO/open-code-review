@@ -174,6 +174,7 @@ type Runner struct {
 	chunkRefetchCount          int64
 	contextReceipts            int64
 	maxEstimatedRequestTokens  int64
+	requestEstimateMu          sync.Mutex
 	lastEstimatedRequestTokens int64
 	// toolFailureStreak counts each (taskKey, toolName) pair's consecutive
 	// failures; see tool_failure_streak.go.
@@ -273,6 +274,9 @@ type RunContextStats struct {
 
 // ContextStats returns the run's context accounting.
 func (r *Runner) ContextStats() RunContextStats {
+	r.requestEstimateMu.Lock()
+	lastEstimatedRequestTokens := r.lastEstimatedRequestTokens
+	r.requestEstimateMu.Unlock()
 	return RunContextStats{
 		UniqueContextChunks:        atomic.LoadInt64(&r.uniqueContextChunks),
 		ChunkFetchCount:            atomic.LoadInt64(&r.chunkFetchCount),
@@ -281,7 +285,19 @@ func (r *Runner) ContextStats() RunContextStats {
 		RawContextResendTokens:     atomic.LoadInt64(&r.rawContextResendTokens),
 		ContextReceipts:            atomic.LoadInt64(&r.contextReceipts),
 		MaxEstimatedRequestTokens:  atomic.LoadInt64(&r.maxEstimatedRequestTokens),
-		LastEstimatedRequestTokens: atomic.LoadInt64(&r.lastEstimatedRequestTokens),
+		LastEstimatedRequestTokens: lastEstimatedRequestTokens,
+	}
+}
+
+// recordRequestEstimate records the latest dispatch estimate and run-wide maximum.
+func (r *Runner) recordRequestEstimate(tokens int64) {
+	r.requestEstimateMu.Lock()
+	r.lastEstimatedRequestTokens = tokens
+	r.requestEstimateMu.Unlock()
+	for current := atomic.LoadInt64(&r.maxEstimatedRequestTokens); tokens > current; current = atomic.LoadInt64(&r.maxEstimatedRequestTokens) {
+		if atomic.CompareAndSwapInt64(&r.maxEstimatedRequestTokens, current, tokens) {
+			break
+		}
 	}
 }
 
@@ -567,8 +583,15 @@ func (r *Runner) RunMainTask(ctx context.Context, messages []llm.Message, taskKe
 			MaxTokens: r.deps.Template.CompletionTokenLimit(),
 			SessionID: sessionID,
 		}
+		r.recordRequestEstimate(int64((llm.TokenizerRequestInputEstimator{}).EstimateRequestInputTokens(r.deps.Model, req)))
 		resp, err := r.deps.LLMClient.CompletionsWithCtx(reqCtx, req)
+		requestTelemetryRecorded := false
 		if _, overBudget := llm.AsRequestInputBudgetError(err); overBudget {
+			refusalDuration := time.Since(startTime)
+			telemetry.RecordLLMResult(llmSpan, refusalDuration, 0, err)
+			llmSpan.End()
+			telemetry.RecordLLMRequest(ctx, r.deps.Model, refusalDuration, 0, "error")
+			requestTelemetryRecorded = true
 			// The guard refuses instead of sending, and main_task is the one
 			// family with a safe, already-implemented reduction. It gets
 			// exactly one compression attempt and one retry; a refusal that
@@ -582,15 +605,20 @@ func (r *Runner) RunMainTask(ctx context.Context, messages []llm.Message, taskKe
 				// compressed answer answered it.
 				rec = fs.AppendTaskRecord(session.MainTask, append([]llm.Message(nil), messages...))
 				reqCtx = r.requestCtx(ctx, taskKey, session.MainTask, rec.RequestNo)
+				_, llmSpan = telemetry.StartLLMSpan(ctx, r.deps.Model)
+				r.recordRequestEstimate(int64((llm.TokenizerRequestInputEstimator{}).EstimateRequestInputTokens(r.deps.Model, req)))
 				resp, err = r.deps.LLMClient.CompletionsWithCtx(reqCtx, req)
+				requestTelemetryRecorded = false
 			}
 		}
 		duration := time.Since(startTime)
 		if err != nil {
 			rec.SetError(err, duration)
-			telemetry.RecordLLMResult(llmSpan, duration, 0, err)
-			llmSpan.End()
-			telemetry.RecordLLMRequest(ctx, r.deps.Model, duration, 0, "error")
+			if !requestTelemetryRecorded {
+				telemetry.RecordLLMResult(llmSpan, duration, 0, err)
+				llmSpan.End()
+				telemetry.RecordLLMRequest(ctx, r.deps.Model, duration, 0, "error")
+			}
 			return false, StopNone, fmt.Errorf("LLM completion error: %w", err)
 		}
 		rec.SetResponse(resp, duration)
