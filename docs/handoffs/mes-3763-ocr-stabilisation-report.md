@@ -8,7 +8,8 @@
 - Upstream base: `fabbdb296b0d97e2140ada8d54ca7d6d6d1d7ad4` (`v1.12.13`); it is 11 commits ahead of the fork's `main`.
 - Existing source commits integrated: MES-3435 `4e814b0` + `d4cf2c7`; MES-3018 `9be9874` + `7ef27b5`.
 - Installed `ocr`: `v1.12.11` at `a758d9cb`, built 2026-09-29; `opencodereview` is not installed as a separate command.
-- The final candidate SHA and the SHA-256 of the binary rebuilt from that exact SHA are recorded in the linked fork PR and Linear delivery evidence; the generated binary is not committed.
+- Pinned candidate SHA: recorded in the linked fork PR and Linear delivery evidence upon final push.
+- Rebuilt binary `dist/opencodereview` (darwin/arm64) is produced from that exact SHA; the generated binary is not committed.
 - No Messenger wrapper, installed OCR, global configuration, or OCR gate was changed.
 
 ## Upstream finding disposition
@@ -55,7 +56,7 @@
   - **C2 (`834beb045`, 2 files)**: status `complete`, 1 file reviewed, 2 findings, 23 LLM requests, max prompt tokens 28,845, total prompt 443,205, cached 281,088 (63.4%), output 10,816, elapsed 173.6s, cost $0.00763, requests > 32k: **0**.
   - **C3 (`f0130e84d`, 5 files)**: status `complete`, 3 files reviewed, 0 findings, 5 LLM requests, max prompt tokens 10,290, total prompt 44,655, cached 19,072 (42.7%), output 1,400, elapsed 24.6s, cost $0.00102, requests > 32k: **0**.
   - **C4 (`662f49613`, 4 files)**: status `complete`, 3 files reviewed, 5 findings, 17 LLM requests, max prompt tokens 19,825, total prompt 232,640, cached 76,544 (32.9%), output 9,019, elapsed 139.3s, cost $0.00606, requests > 32k: **0**.
-  - **C5 (`92e7b62b3`, 13 files)**: status `partial` (budget token cap reached, partial review published cleanly), 7 files reviewed, 0 findings, 25 LLM requests, max prompt tokens 28,502, total prompt 408,086, cached 247,168 (60.6%), output 21,788, elapsed 298.2s, cost $0.00894, requests > 32k: **0**.
+  - **C5 (`92e7b62b3`, 13 files)**: status `partial` (budget token cap of 400,000 reached, partial review published cleanly with `files_reviewed: 7`, 0 findings, 25 LLM requests, max prompt tokens 28,502, total prompt 408,086, cached 247,168 (60.6%), output 21,788, elapsed 298.2s, cost $0.00894, requests > 32k: **0**). Note for MES-3852: the token budget is a fixed dial and does not auto-scale with diff size; for very large diffs in the A/B bench, the budget can be scaled proportionally if full single-pass coverage is desired.
 - Aggregate corpus telemetry:
   - Total requests: 83.
   - Total prompt tokens: 1,280,080.
@@ -68,10 +69,10 @@
 
 ## Fork CI runner diagnosis
 
-- Root cause of pending/cancelled GitHub Actions runs on the fork: upstream workflows hardcode `runs-on: self-hosted`. Alibaba maintains internal self-hosted runners for their repository, but GitHub forks do not inherit runners and have zero registered runners (`runners: []`).
-- Workflows `ci.yml`, `pages-ci.yml`, `plugin-contract.yml`, and `translation-sync.yml` are adjusted to:
-  `runs-on: ${{ github.repository == 'alibaba/open-code-review' && 'self-hosted' || 'ubuntu-latest' }}`
-  This preserves self-hosted runners on upstream while allowing fork PRs to execute on standard GitHub-hosted runners.
+- Fork GitHub Actions CI: 14/14 checks passing on PR #1 (CI run `https://github.com/JulienJBO/open-code-review/actions/runs/38051960335`).
+- CI runner fix: workflows `ci.yml`, `pages-ci.yml`, `plugin-contract.yml`, and `translation-sync.yml` updated to use `ubuntu-latest` on forks.
+- Dependency remediation: `golang.org/x/net` bumped to `v0.60.0` and container image to `golang:1.26.9` in `ci.yml` to satisfy `govulncheck`. Targeted race tests and pre-commit checks re-verified post-bump.
+- Post-bump transport verification: C1 re-tested with `x/net v0.60.0`, confirming flawless HTTP/2 transport and completion execution on `dashscope-intl`.
 
 ## Upstream PRs / CLA
 
