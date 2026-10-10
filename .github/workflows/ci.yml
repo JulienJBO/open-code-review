@@ -26,7 +26,7 @@ jobs:
     runs-on: ${{ github.repository == 'alibaba/open-code-review' && 'self-hosted' || 'ubuntu-latest' }}
     timeout-minutes: 15
     container:
-      image: golang:1.26.6
+      image: golang:1.26.9
       options: --cpus=2
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -171,7 +171,7 @@ jobs:
     runs-on: ${{ github.repository == 'alibaba/open-code-review' && 'self-hosted' || 'ubuntu-latest' }}
     timeout-minutes: 10
     container:
-      image: golang:1.26.6
+      image: golang:1.26.9
       options: --cpus=2
     strategy:
       fail-fast: false
