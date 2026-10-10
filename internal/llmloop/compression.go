@@ -252,11 +252,13 @@ func (r *Runner) runCompression(ctx context.Context, msgs []llm.Message, taskKey
 
 	startTime := time.Now()
 	reqCtx := r.requestCtx(ctx, taskKey, session.MemoryCompressionTask, rec.RequestNo)
-	resp, err := r.deps.LLMClient.CompletionsWithCtx(reqCtx, llm.ChatRequest{
+	req := llm.ChatRequest{
 		Model:     r.deps.Model,
 		Messages:  compressionMsgs,
 		MaxTokens: r.deps.Template.CompletionTokenLimit(),
-	})
+	}
+	r.recordRequestEstimate(int64((llm.TokenizerRequestInputEstimator{}).EstimateRequestInputTokens(r.deps.Model, req)))
+	resp, err := r.deps.LLMClient.CompletionsWithCtx(reqCtx, req)
 	duration := time.Since(startTime)
 
 	if err != nil {

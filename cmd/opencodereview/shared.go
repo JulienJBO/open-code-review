@@ -235,7 +235,7 @@ var newRetryCollector = llm.NewRetryCollector
 // tpl — defaulting when the config file is absent), resolves the LLM
 // endpoint (honoring resolveOpts), and
 // returns the runtime bundle. tpl is mutated in place.
-func loadLLMRuntime(tpl *template.Template, toolConfigPath string, resolveOpts llm.ResolveOptions) (*llmRuntime, error) {
+func loadLLMRuntime(tpl *template.Template, toolConfigPath string, resolveOpts llm.ResolveOptions, inputBudget llm.RequestInputBudget) (*llmRuntime, error) {
 	toolEntries, err := toolsconfig.Load(toolConfigPath)
 	if err != nil {
 		return nil, fmt.Errorf("load tools: %w", err)
@@ -271,8 +271,27 @@ func loadLLMRuntime(tpl *template.Template, toolConfigPath string, resolveOpts l
 		rawHolder = llm.NewRawHolder()
 	}
 
+	client := llm.NewLLMClient(ep, retryCollector, rawHolder)
+
+	// The per-request input guard wraps the client here, the single place
+	// every run builds one, so no task family — and no family added later —
+	// can reach the provider without passing it. The decision sink resolves
+	// the writer lazily because the writer is bound per session, well after
+	// the client exists.
+	var guardOpts []llm.RequestInputGuardOption
+	if rawHolder != nil {
+		guardOpts = append(guardOpts, llm.WithRequestInputSink(llm.RequestInputSinkFunc(func(rec llm.RequestInputRecord) {
+			if sink := rawHolder.RequestInputSink(); sink != nil {
+				sink.WriteRequestInput(rec)
+			}
+		})))
+	}
+	if guarded := llm.NewRequestInputGuardClient(client, ep.Model, inputBudget, guardOpts...); guarded != nil {
+		client = guarded
+	}
+
 	return &llmRuntime{
-		Client:         llm.NewLLMClient(ep, retryCollector, rawHolder),
+		Client:         client,
 		Model:          ep.Model,
 		Provider:       ep.Provider,
 		Source:         ep.Source,
@@ -775,6 +794,9 @@ type ResultProvider interface {
 	TotalTokensUsed() int64
 	TotalCacheReadTokens() int64
 	TotalCacheWriteTokens() int64
+	// ContextStats returns the review-context accounting: chunks offered,
+	// reads served, raw tokens sent, payloads replaced by a receipt.
+	ContextStats() llmloop.RunContextStats
 	Warnings() []agent.AgentWarning
 	// ProjectSummary is the markdown project-level summary produced by
 	// scan's PROJECT_SUMMARY_TASK. Empty for review mode and for scans
@@ -868,6 +890,8 @@ func emitRunResult(
 			CacheWriteTokens:  ag.TotalCacheWriteTokens(),
 			Duration:          duration,
 			SessionID:         ag.SessionID(),
+			ContextChunks:     ag.ContextStats().UniqueContextChunks,
+			ContextReceipts:   ag.ContextStats().ContextReceipts,
 		})
 	}
 
@@ -883,7 +907,7 @@ func emitRunResult(
 		return outputJSONWithWarnings(comments, ag.Warnings(), ag.FilesReviewed(),
 			ag.TotalInputTokens(), ag.TotalOutputTokens(), ag.TotalTokensUsed(),
 			ag.TotalCacheReadTokens(), ag.TotalCacheWriteTokens(), duration,
-			ag.ProjectSummary(), ag.ToolCalls(), ag.ToolFailures(), traceID, resumeInfo, ag.SessionID(), manifest, ag.BudgetExceeded(), llmIdentity, out, retryReport, groups)
+			ag.ProjectSummary(), ag.ToolCalls(), ag.ToolFailures(), traceID, resumeInfo, ag.SessionID(), manifest, ag.BudgetExceeded(), llmIdentity, out, retryReport, groups, ag.ContextStats())
 	}
 	if outputFormat == "sarif" {
 		return outputSARIF(comments, Version, ag.Warnings(), manifest, out)

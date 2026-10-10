@@ -48,9 +48,20 @@ type reviewOptions struct {
 	maxGitProcs           int
 	maxTokens             int
 	maxTokensBudget       int
-	effort                string
-	noFilter              bool
-	preview               bool
+	// maxRequestInputTokens bounds a single request's estimated input, a
+	// third notion next to the two above: the per-group prompt ceiling drives
+	// selection and compression, the run budget bounds aggregate spend, and
+	// this one refuses to emit an over-sized request at all.
+	maxRequestInputTokens int
+	// requestTokenSafetyMargin is the share of that ceiling requests may
+	// spend, absorbing the gap between our tokenizer and the provider's.
+	requestTokenSafetyMargin float64
+	// allowInputBudgetReduction trades the economic guarantee for review
+	// coverage; see llm.TaskTypeMemoryCompression.
+	allowInputBudgetReduction bool
+	effort                    string
+	noFilter                  bool
+	preview                   bool
 }
 
 var reviewOpts reviewOptions
@@ -160,10 +171,15 @@ func executeReviewContext(ctx context.Context, opts reviewOptions) (retErr error
 		return err
 	}
 
+	inputBudget, err := requestInputBudget(opts.maxRequestInputTokens, opts.requestTokenSafetyMargin, opts.allowInputBudgetReduction)
+	if err != nil {
+		return err
+	}
+
 	rt, err := loadLLMRuntime(cc.Template, opts.toolConfigPath, llm.ResolveOptions{
 		Provider: opts.provider,
 		Model:    opts.model,
-	})
+	}, inputBudget)
 	if err != nil {
 		return err
 	}
