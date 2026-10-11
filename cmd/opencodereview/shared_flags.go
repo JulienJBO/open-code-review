@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/alibaba/open-code-review/internal/config/template"
+	"github.com/alibaba/open-code-review/internal/llm"
 	"github.com/spf13/cobra"
 )
 
@@ -50,6 +51,34 @@ func addExcludeFlag(cmd *cobra.Command, target *string) {
 }
 
 const taskTimeoutHelp = "concurrent task budget in minutes, including LLM requests and retries (0 = unlimited); independent per-request timeout: OCR_LLM_TIMEOUT or provider timeout_sec in seconds (default 300)"
+
+// addRequestInputBudgetFlags registers the per-request input ceiling. The
+// margin defaults to llm.DefaultRequestInputSafetyMargin when the flag is
+// absent, so a user who only sets the ceiling still gets a guarded run.
+func addRequestInputBudgetFlags(cmd *cobra.Command, maxRequestInputTokens *int, safetyMargin *float64, reductionExemption *bool) {
+	cmd.Flags().BoolVar(reductionExemption, "allow-input-budget-reduction", false, "let the memory-compression request exceed the per-request ceiling so 'reduce first, refuse after' stays reachable; buys review coverage back at the cost of letting that one request cross the provider cliff")
+	cmd.Flags().IntVar(maxRequestInputTokens, "max-request-input-tokens", 0, "provider input-token cliff for a single request; a request whose estimated input (including tools and schemas) exceeds it times the safety margin is not sent (0 = no per-request ceiling)")
+	cmd.Flags().Float64Var(safetyMargin, "request-token-safety-margin", 0, fmt.Sprintf("share of --max-request-input-tokens a single request may spend, within (0, 1] (0 = default %v); absorbs the gap between our tokenizer and the provider's", llm.DefaultRequestInputSafetyMargin))
+}
+
+// requestInputBudget turns the raw flag values into a validated budget. A
+// margin with no ceiling is a mistake worth naming rather than ignoring: the
+// user believes the run is guarded, and it would not be.
+func requestInputBudget(maxRequestInputTokens int, safetyMargin float64, reductionExemption bool) (llm.RequestInputBudget, error) {
+	budget := llm.RequestInputBudget{ProviderLimitTokens: maxRequestInputTokens, SafetyMargin: safetyMargin, AllowReductionExemption: reductionExemption}
+	if safetyMargin != 0 {
+		if err := llm.ValidateRequestInputSafetyMargin(safetyMargin); err != nil {
+			return budget, err
+		}
+	}
+	if budget.ProviderLimitTokens == 0 && budget.AllowReductionExemption {
+		return budget, fmt.Errorf("--allow-input-budget-reduction needs --max-request-input-tokens; there is no per-request ceiling for it to relax")
+	}
+	if budget.ProviderLimitTokens == 0 && budget.SafetyMargin != 0 {
+		return budget, fmt.Errorf("--request-token-safety-margin needs --max-request-input-tokens; there is no per-request ceiling to apply it to")
+	}
+	return budget.WithDefaults(), budget.Validate()
+}
 
 func addConcurrencyFlags(cmd *cobra.Command, concurrency, timeout, maxTools, maxGitProcs, maxTokens, maxTokensBudget *int) {
 	cmd.Flags().IntVar(concurrency, "concurrency", 8, "max concurrent subtasks")
@@ -155,6 +184,9 @@ func validateReviewOptions(opts *reviewOptions) error {
 	if opts.maxTokensBudget < 0 {
 		return fmt.Errorf("--max-tokens-budget must be a non-negative integer (0 means unlimited)")
 	}
+	if _, err := requestInputBudget(opts.maxRequestInputTokens, opts.requestTokenSafetyMargin, opts.allowInputBudgetReduction); err != nil {
+		return err
+	}
 	if opts.effort != "" {
 		if _, err := template.ParseEffort(opts.effort); err != nil {
 			return fmt.Errorf("--effort: %w", err)
@@ -187,6 +219,9 @@ func validateScanOptions(opts *scanOptions) error {
 	if opts.maxTokensBudget < 0 {
 		return fmt.Errorf("--max-tokens-budget must be a non-negative integer (0 means unlimited)")
 	}
+	if _, err := requestInputBudget(opts.maxRequestInputTokens, opts.requestTokenSafetyMargin, opts.allowInputBudgetReduction); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -212,6 +247,7 @@ func registerReviewFlags(cmd *cobra.Command, opts *reviewOptions) {
 	addOutputFlags(cmd, &opts.outputFormat, &opts.audience)
 	addOutputPathFlag(cmd, &opts.outputPath)
 	addConcurrencyFlags(cmd, &opts.concurrency, &opts.concurrentTaskTimeout, &opts.maxTools, &opts.maxGitProcs, &opts.maxTokens, &opts.maxTokensBudget)
+	addRequestInputBudgetFlags(cmd, &opts.maxRequestInputTokens, &opts.requestTokenSafetyMargin, &opts.allowInputBudgetReduction)
 	addBackgroundFlags(cmd, &opts.background, &opts.backgroundFile)
 	addProviderFlag(cmd, &opts.provider)
 	addModelFlag(cmd, &opts.model)
@@ -236,6 +272,7 @@ func registerScanFlags(cmd *cobra.Command, opts *scanOptions) {
 	cmd.Flags().IntVar(&opts.maxGitProcs, "max-git-procs", 16, "max concurrent git subprocesses")
 	cmd.Flags().IntVar(&opts.maxTokens, "max-tokens", 0, "per-file prompt token ceiling (0 = configured or template default)")
 	cmd.Flags().IntVar(&opts.maxTokensBudget, "max-tokens-budget", 0, "cap total token usage; checked before every LLM round and at dispatch (0 = unlimited)")
+	addRequestInputBudgetFlags(cmd, &opts.maxRequestInputTokens, &opts.requestTokenSafetyMargin, &opts.allowInputBudgetReduction)
 	cmd.Flags().StringVarP(&opts.background, "background", "b", "", "optional requirement/business context for the scan")
 	cmd.Flags().BoolVarP(&opts.preview, "preview", "p", false, "preview which files will be scanned without running the LLM")
 	cmd.Flags().BoolVar(&opts.noPlan, "no-plan", false, "skip the per-file PLAN_TASK pre-pass")

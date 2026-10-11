@@ -45,9 +45,16 @@ type scanOptions struct {
 	batch                 string
 	maxTokens             int
 	maxTokensBudget       int
-	provider              string
-	model                 string
-	resume                string
+	// maxRequestInputTokens and requestTokenSafetyMargin carry the per-request
+	// input ceiling; see reviewOptions for why it is a third notion.
+	maxRequestInputTokens    int
+	requestTokenSafetyMargin float64
+	// allowInputBudgetReduction trades the economic guarantee for review
+	// coverage; see llm.TaskTypeMemoryCompression.
+	allowInputBudgetReduction bool
+	provider                  string
+	model                     string
+	resume                    string
 }
 
 var scanOpts scanOptions
@@ -166,10 +173,15 @@ func executeScan(opts scanOptions) (retErr error) {
 		return err
 	}
 
+	inputBudget, err := requestInputBudget(opts.maxRequestInputTokens, opts.requestTokenSafetyMargin, opts.allowInputBudgetReduction)
+	if err != nil {
+		return err
+	}
+
 	rt, err := loadLLMRuntime(cc.Template, opts.toolConfigPath, llm.ResolveOptions{
 		Provider: opts.provider,
 		Model:    opts.model,
-	})
+	}, inputBudget)
 	if err != nil {
 		return err
 	}

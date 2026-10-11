@@ -129,6 +129,9 @@ staged + unstaged + untracked changes in the current directory's repo.
 | `--max-tools <n>` | — | template default | Max tool-call rounds per subtask. `0` uses the template default (`100`); values 1–49 are clamped up to `50`. The flag only ever *raises* the cap — a value below the template default is ignored. |
 | `--max-tokens <n>` | — | config or template default | Prompt (input) token ceiling per subtask; the template default is `200000`. Overrides the saved `max_tokens` setting for this run. Does not change the output cap — see `MAX_COMPLETION_TOKENS`. |
 | `--max-tokens-budget <n>` | — | `0` (unlimited) | Cap total input + output token usage for the review. Checked before every LLM round: a subtask already over budget gets one final round to submit findings and is reported as `failed(budget)`, no further subtasks are dispatched, and partial results are still published. |
+| `--max-request-input-tokens <n>` | — | `0` (no ceiling) | Provider input-token cliff for a **single** request. Every request's full serialized input — messages, tool calls and results, tool definitions and their JSON schemas, and framing — is estimated just before it is sent; a request above the limit is **not sent**. Distinct from `--max-tokens` (context selection and compression) and `--max-tokens-budget` (aggregate run spend). A refused item is reported with classification `input_budget`. |
+| `--request-token-safety-margin <f>` | — | `0.9` | Share of `--max-request-input-tokens` a single request may spend, within `(0, 1]`. The estimate uses our tokenizer, which under-counts when the provider's differs (e.g. Qwen); the margin absorbs that gap. `0` means the default. |
+| `--allow-input-budget-reduction` | — | `false` | Let the memory-compression request exceed the per-request ceiling, so that "reduce first, refuse after" stays reachable. The compression prompt embeds the conversation being compressed, so a strict guard cannot compress what is already over the ceiling. This buys review coverage back **at the cost of the economic guarantee**: that one request may cross the provider cliff. |
 | `--provider <name>` | — | — | Select a configured provider for this run. Names under both `providers` and `custom_providers` are accepted. |
 | `--model <name>` | — | — | Override the resolved LLM model for this run (e.g., `claude-opus-4-6`). |
 | `--max-git-procs <n>` | — | `16` | Maximum number of concurrent git subprocesses. |
@@ -331,6 +334,7 @@ Top-level fields:
 | `comments` | Always present, possibly empty. Per-comment fields are the ones in the example above. |
 | `warnings` | Optional. Present when one or more sub-agents failed; each entry describes the affected file and the error. |
 | `session_id` | Optional. Present on persisted review runs; pass this to `ocr review --resume <session-id>` when retrying compatible range or commit reviews. |
+| `context` | Optional. `unique_context_chunks`, `chunk_fetch_count`, `chunk_refetch_count`, `raw_context_tokens_sent`, `raw_context_resend_tokens`, `context_receipts`, `max_estimated_request_tokens`, `last_estimated_request_tokens`. These are estimates of what the tool handed to the client — not provider-reported usage, which is in `summary.input_tokens`. |
 | `resume` | Optional. Present on resumed runs with `resumed_from`, `reused_files`, `rerun_files`, `previous_model`, and `current_model`. |
 
 When no files were eligible for review, JSON mode emits a `skipped`

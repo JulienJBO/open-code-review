@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/alibaba/open-code-review/internal/chunk"
 	"strings"
 	"testing"
 
@@ -132,8 +133,11 @@ func TestInjectDiffMap(t *testing.T) {
 	}
 
 	a.injectDiffMap()
+	// injectDiffMap leaves the fallback budget closed; a group supplies its
+	// own read ceiling through the tool-call context.
+	ctx := tool.WithFileReadDiffBudget(context.Background(), chunk.DeriveBudget(8000, 0, 1000).Read())
 
-	result, err := frd.Execute(context.Background(), map[string]any{
+	result, err := frd.Execute(ctx, map[string]any{
 		"path_array": []any{"main.go"},
 	})
 	if err != nil {
@@ -143,7 +147,7 @@ func TestInjectDiffMap(t *testing.T) {
 		t.Errorf("DiffMap did not contain main.go diff, got: %q", result)
 	}
 
-	result2, _ := frd.Execute(context.Background(), map[string]any{
+	result2, _ := frd.Execute(ctx, map[string]any{
 		"path_array": []any{"deleted.go"},
 	})
 	if !strings.Contains(result2, "not found") {
@@ -215,7 +219,7 @@ func TestExecuteReviewFilter_NoFilterTask(t *testing.T) {
 		},
 	})
 
-	a.executeGroupReviewFilter(context.Background(), FileGroup{Label: "a.go", Diffs: []model.Diff{{NewPath: "a.go"}}}, nil)
+	a.executeGroupReviewFilter(context.Background(), FileGroup{Label: "a.go", Diffs: []model.Diff{{NewPath: "a.go"}}}, nil, chunk.Budget{})
 	if client.calls != 0 {
 		t.Errorf("no LLM calls expected when ReviewFilterTask is nil, got %d", client.calls)
 	}
@@ -239,7 +243,7 @@ func TestExecuteReviewFilter_NoComments(t *testing.T) {
 		},
 	})
 
-	a.executeGroupReviewFilter(context.Background(), FileGroup{Label: "a.go", Diffs: []model.Diff{{NewPath: "a.go", Diff: "+x"}}}, nil)
+	a.executeGroupReviewFilter(context.Background(), FileGroup{Label: "a.go", Diffs: []model.Diff{{NewPath: "a.go", Diff: "+x"}}}, nil, chunk.Budget{})
 	if client.calls != 0 {
 		t.Errorf("no LLM calls expected when no comments exist, got %d", client.calls)
 	}
@@ -281,7 +285,7 @@ func TestExecuteReviewFilter_OmitsToolChoiceAndFailsOpenWithoutToolCall(t *testi
 		},
 	})
 
-	a.executeGroupReviewFilter(context.Background(), FileGroup{Label: "a.go", Diffs: []model.Diff{{NewPath: "a.go", Diff: "+x"}}}, nil)
+	a.executeGroupReviewFilter(context.Background(), FileGroup{Label: "a.go", Diffs: []model.Diff{{NewPath: "a.go", Diff: "+x"}}}, nil, chunk.Budget{})
 
 	if client.calls != 1 {
 		t.Fatalf("LLM calls = %d, want 1", client.calls)
@@ -339,7 +343,7 @@ func TestExecuteReviewFilter_RemovesComments(t *testing.T) {
 		},
 	})
 
-	a.executeGroupReviewFilter(context.Background(), FileGroup{Label: "a.go", Diffs: []model.Diff{{NewPath: "a.go", Diff: "+code"}}}, nil)
+	a.executeGroupReviewFilter(context.Background(), FileGroup{Label: "a.go", Diffs: []model.Diff{{NewPath: "a.go", Diff: "+code"}}}, nil, chunk.Budget{})
 
 	comments := collector.CommentsForPath("a.go")
 	if len(comments) != 2 {
@@ -378,7 +382,7 @@ func TestExecuteReviewFilter_LLMError(t *testing.T) {
 		},
 	})
 
-	a.executeGroupReviewFilter(context.Background(), FileGroup{Label: "a.go", Diffs: []model.Diff{{NewPath: "a.go", Diff: "+x"}}}, nil)
+	a.executeGroupReviewFilter(context.Background(), FileGroup{Label: "a.go", Diffs: []model.Diff{{NewPath: "a.go", Diff: "+x"}}}, nil, chunk.Budget{})
 
 	comments := collector.CommentsForPath("a.go")
 	if len(comments) != 1 {
@@ -410,7 +414,7 @@ func TestExecuteReviewFilter_SkipFilter(t *testing.T) {
 			},
 		})
 
-		a.executeGroupReviewFilter(context.Background(), FileGroup{Label: "a.go", Diffs: []model.Diff{{NewPath: "a.go", Diff: "+code"}}}, nil)
+		a.executeGroupReviewFilter(context.Background(), FileGroup{Label: "a.go", Diffs: []model.Diff{{NewPath: "a.go", Diff: "+code"}}}, nil, chunk.Budget{})
 
 		if client.calls != 0 {
 			t.Errorf("no LLM calls expected when SkipFilter is true, got %d", client.calls)
@@ -446,7 +450,7 @@ func TestExecuteReviewFilter_SkipFilter(t *testing.T) {
 			},
 		})
 
-		a.executeGroupReviewFilter(context.Background(), FileGroup{Label: "a.go", Diffs: []model.Diff{{NewPath: "a.go", Diff: "+code"}}}, nil)
+		a.executeGroupReviewFilter(context.Background(), FileGroup{Label: "a.go", Diffs: []model.Diff{{NewPath: "a.go", Diff: "+code"}}}, nil, chunk.Budget{})
 
 		comments := collector.CommentsForPath("a.go")
 		if len(comments) != 3 {
@@ -495,7 +499,7 @@ func TestExecuteReviewFilter_SkipFilter(t *testing.T) {
 			},
 		})
 
-		a.executeGroupReviewFilter(context.Background(), FileGroup{Label: "a.go", Diffs: []model.Diff{{NewPath: "a.go", Diff: "+code"}}}, nil)
+		a.executeGroupReviewFilter(context.Background(), FileGroup{Label: "a.go", Diffs: []model.Diff{{NewPath: "a.go", Diff: "+code"}}}, nil, chunk.Budget{})
 
 		if client.calls == 0 {
 			t.Error("LLM client should have been called when SkipFilter is false (default)")
@@ -532,7 +536,7 @@ func TestExecuteReviewFilter_SkipFilter(t *testing.T) {
 			},
 		})
 
-		a.executeGroupReviewFilter(context.Background(), FileGroup{Label: "a.go", Diffs: []model.Diff{{NewPath: "a.go", Diff: "+x"}}}, nil)
+		a.executeGroupReviewFilter(context.Background(), FileGroup{Label: "a.go", Diffs: []model.Diff{{NewPath: "a.go", Diff: "+x"}}}, nil, chunk.Budget{})
 
 		if client.calls != 0 {
 			t.Errorf("no LLM calls expected when SkipFilter is true, got %d", client.calls)
@@ -562,7 +566,7 @@ func TestExecuteReviewFilter_SkipFilter(t *testing.T) {
 			},
 		})
 
-		a.executeGroupReviewFilter(context.Background(), FileGroup{Label: "a.go", Diffs: []model.Diff{{NewPath: "a.go", Diff: "+x"}}}, nil)
+		a.executeGroupReviewFilter(context.Background(), FileGroup{Label: "a.go", Diffs: []model.Diff{{NewPath: "a.go", Diff: "+x"}}}, nil, chunk.Budget{})
 
 		if client.calls != 0 {
 			t.Errorf("no LLM calls expected when SkipFilter is true, got %d", client.calls)
@@ -876,7 +880,7 @@ func TestExecuteReviewFilter_WithTimeout(t *testing.T) {
 		},
 	})
 
-	a.executeGroupReviewFilter(context.Background(), FileGroup{Label: "a.go", Diffs: []model.Diff{{NewPath: "a.go", Diff: "+x"}}}, nil)
+	a.executeGroupReviewFilter(context.Background(), FileGroup{Label: "a.go", Diffs: []model.Diff{{NewPath: "a.go", Diff: "+x"}}}, nil, chunk.Budget{})
 
 	comments := collector.CommentsForPath("a.go")
 	if len(comments) != 1 {
@@ -955,6 +959,10 @@ func TestClassifyItemError(t *testing.T) {
 		{"main_task_empty", errMainTaskEmpty, session.FailureConfiguration},
 		{"main_task_empty_wrapped", fmt.Errorf("subtask %s: %w", secret, errMainTaskEmpty), session.FailureConfiguration},
 		{"default_provider", errors.New(secret), session.FailureProvider},
+		// The guard refuses before any HTTP call: calling it a provider fault
+		// would point the operator at a provider that received nothing.
+		{"input_budget", &llm.RequestInputBudgetError{EstimatedInputTokens: 41000, EffectiveLimitTokens: 28800}, session.FailureInputBudget},
+		{"input_budget_wrapped", fmt.Errorf("review %s: %w", secret, &llm.RequestInputBudgetError{EstimatedInputTokens: 41000, EffectiveLimitTokens: 28800}), session.FailureInputBudget},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			class, reason := classifyItemError(tc.err)

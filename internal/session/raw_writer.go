@@ -96,6 +96,32 @@ func (w *RawFileWriter) Write(rec llm.RawRecord) {
 	}
 }
 
+// WriteRequestInput appends one per-request input guard decision as a JSONL
+// line in the same capture file. It lands beside the HTTP attempts it
+// describes rather than in a file of its own: a decision is only readable
+// against the exchange that followed it (or did not).
+func (w *RawFileWriter) WriteRequestInput(rec llm.RequestInputRecord) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	rec.SessionID = w.sessionID
+	if rec.Timestamp == "" {
+		rec.Timestamp = time.Now().UTC().Format(time.RFC3339)
+	}
+	w.buf.Reset()
+	if err := w.encoder.Encode(rec); err != nil {
+		w.warn(err)
+		return
+	}
+	line := w.buf.Bytes()
+	n, err := w.file.Write(line)
+	if n < len(line) && err == nil {
+		err = fmt.Errorf("short write: %d of %d bytes", n, len(line))
+	}
+	if err != nil {
+		w.warn(err)
+	}
+}
+
 // warn reports the first capture failure on stderr; later failures stay
 // silent so a degraded sink cannot spam every subsequent record.
 func (w *RawFileWriter) warn(err error) {
