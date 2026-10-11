@@ -22,6 +22,7 @@ jobs:
     runs-on: ${{ github.repository == 'alibaba/open-code-review' && 'self-hosted' || 'ubuntu-latest' }}
     timeout-minutes: 10
     container:
+      # Pin Node to an exact version for reproducible builds.
       image: node:24.18.0
     steps:
       # fetch-depth: 0 so the non-blocking docs check can diff base...head.
