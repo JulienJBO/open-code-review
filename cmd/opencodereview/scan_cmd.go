@@ -138,7 +138,7 @@ func executeScanContext(ctx context.Context, opts scanOptions) (retErr error) {
 
 	// scan owns its own template (scan_template.json) independent from the
 	// diff-review template loaded by loadCommonContext above. Apply --max-tools
-	// as an "only raise" override to the scan template's per-file budget.
+	// as an explicit override (raise or lower) to the scan template's budget.
 	scanTpl, err := template.LoadScanDefault()
 	if err != nil {
 		return fmt.Errorf("load scan template: %w", err)
@@ -146,7 +146,7 @@ func executeScanContext(ctx context.Context, opts scanOptions) (retErr error) {
 	if err := scanTpl.Validate(); err != nil {
 		return fmt.Errorf("invalid scan template: %w", err)
 	}
-	if opts.maxTools > scanTpl.MaxToolRequestTimes {
+	if opts.maxTools > 0 {
 		scanTpl.MaxToolRequestTimes = opts.maxTools
 	}
 	if opts.batch != "" {

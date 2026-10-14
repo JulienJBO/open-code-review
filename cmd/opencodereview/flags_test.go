@@ -4,6 +4,7 @@
 package main
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
@@ -82,13 +83,18 @@ func TestParseReviewFlags_NegativeMaxTools(t *testing.T) {
 	}
 }
 
-func TestParseReviewFlags_MaxToolsBelowMin(t *testing.T) {
-	opts, err := parseReviewFlags([]string{"--max-tools", "30"})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if opts.maxTools != 50 {
-		t.Errorf("maxTools = %d, want 50 (clamped to min)", opts.maxTools)
+// An explicit --max-tools must be honored in both directions: the bounded
+// review profile depends on lowering the cap (e.g. 10), which the old
+// clamp-to-50 behavior silently refused.
+func TestParseReviewFlags_MaxToolsHonoredVerbatim(t *testing.T) {
+	for _, want := range []int{10, 30, 50, 150} {
+		opts, err := parseReviewFlags([]string{"--max-tools", strconv.Itoa(want)})
+		if err != nil {
+			t.Fatalf("--max-tools %d: unexpected error: %v", want, err)
+		}
+		if opts.maxTools != want {
+			t.Errorf("--max-tools %d: got %d, want verbatim", want, opts.maxTools)
+		}
 	}
 }
 

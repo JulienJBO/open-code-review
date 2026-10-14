@@ -799,32 +799,29 @@ dispatchLoop:
 			}
 			if !completed {
 				if stop != nil {
-					// A group that stopped short of task_done may still have produced
-					// usable output for some of its files before the round/token
-					// budget ran out. Classify per file rather than per group so a
-					// file that already has comments lands in Completed instead of
-					// Failed — otherwise a single stuck file drags its whole group
-					// (and, when nothing else was dispatched, the whole run) down to
-					// terminal_state=failed even though real coverage exists.
+					// A group stopped short of task_done is never covered — even
+					// when it produced comments: the conversation was cut mid
+					// tool_calls, so claiming those files as reviewed would
+					// fabricate coverage. Every file lands in failed(stop.class);
+					// files that did produce comments keep the finding count in
+					// their failure reason, and the comments themselves stay in
+					// the published review output. Coverage honesty is per item,
+					// never retrofitted from comment presence.
 					var failedCount int64
 					for _, d := range g.Diffs {
 						fingerprint := reviewItemFingerprint(a.reviewMode(), d)
+						reason := stop.reason
 						if comments := a.args.CommentCollector.CommentsForPath(d.NewPath); len(comments) > 0 {
-							a.markCompleted(d)
-							a.session.RecordReviewItemDone(d.NewPath, d.OldPath, d.NewPath, fingerprint, comments)
-							continue
+							reason = fmt.Sprintf("%s; %d finding(s) preserved (coverage partial)", stop.reason, len(comments))
 						}
-						a.markFailed(d, stop.class, stop.reason)
+						a.markFailed(d, stop.class, reason)
 						if stop.checkpoint != "" {
 							a.session.RecordReviewItemFailed(d.NewPath, d.OldPath, d.NewPath, fingerprint, stop.checkpoint)
 						}
 						failedCount++
 					}
-					// subtaskFailed must count only the files actually marked failed
-					// above, not the whole group — a group can mix Completed and
-					// Failed files, and reportAsError itself is a group-level signal
-					// (any file with comments suppresses it) that must not be assumed
-					// to imply failedCount == len(g.Diffs).
+					// failedCount now equals len(g.Diffs): every file of a
+					// truncated group is failed, with or without comments.
 					if stop.reportAsError && failedCount > 0 {
 						atomic.AddInt64(&a.subtaskFailed, failedCount)
 						stopErr := errors.New(stop.checkpoint)
@@ -1274,7 +1271,10 @@ func classifyMainLoopStop(stop llmloop.MainLoopStop) (session.FailureClass, stri
 // explicit cause recorded at the trigger point, instead of re-parsing free text
 // or ctx state. class + reason feed the manifest MarkFailed; checkpoint is the
 // detailed human-facing text preserved for the legacy RecordReviewItemFailed
-// resume record (unchanged behavior).
+// resume record (unchanged behavior). reportAsError additionally surfaces a
+// group-level subtask_error and counts the group's files into subtaskFailed —
+// set it for truncation stops (round cap, aggregate budget), leave it unset
+// where the trigger already recorded its own warning.
 type subtaskStop struct {
 	class         session.FailureClass
 	reason        string
@@ -1385,16 +1385,6 @@ func (a *Agent) checkPromptBudget(ctx context.Context, messages []llm.Message, g
 		reason:     "prompt exceeded the configured token budget",
 		checkpoint: msg,
 	}
-}
-
-// groupHasComments reports whether any file in the group has comments.
-func (a *Agent) groupHasComments(g FileGroup) bool {
-	for _, d := range g.Diffs {
-		if len(a.args.CommentCollector.CommentsForPath(d.NewPath)) > 0 {
-			return true
-		}
-	}
-	return false
 }
 
 // diffsChurn returns the set's aggregate churn and its largest single-file
@@ -1582,10 +1572,12 @@ func (a *Agent) executeGroupSubtask(ctx context.Context, g FileGroup) (bool, *su
 			}
 			class, reason := classifyMainLoopStop(mainStop)
 			lastStop = &subtaskStop{
-				class:         class,
-				reason:        reason,
-				checkpoint:    fmt.Sprintf("main_task did not complete before stopping (round %d/%d)", round, maxRounds),
-				reportAsError: !a.groupHasComments(g),
+				class:      class,
+				reason:     reason,
+				checkpoint: fmt.Sprintf("main_task did not complete before stopping (round %d/%d)", round, maxRounds),
+				// A cap stop is always surfaced: the group is truncated no matter
+				// how many findings it already submitted.
+				reportAsError: true,
 			}
 			break
 		}

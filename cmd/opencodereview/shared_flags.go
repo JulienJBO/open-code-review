@@ -5,7 +5,6 @@ package main
 
 import (
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/alibaba/open-code-review/internal/config/template"
@@ -83,7 +82,7 @@ func requestInputBudget(maxRequestInputTokens int, safetyMargin float64, reducti
 func addConcurrencyFlags(cmd *cobra.Command, concurrency, timeout, maxTools, maxGitProcs, maxTokens, maxTokensBudget *int) {
 	cmd.Flags().IntVar(concurrency, "concurrency", 8, "max concurrent subtasks")
 	cmd.Flags().IntVar(timeout, "timeout", 15, taskTimeoutHelp)
-	cmd.Flags().IntVar(maxTools, "max-tools", 0, "max tool call rounds per subtask (0 = template default; min 50)")
+	cmd.Flags().IntVar(maxTools, "max-tools", 0, "max tool call rounds per subtask (0 = template default; an explicit value raises or lowers the cap)")
 	cmd.Flags().IntVar(maxGitProcs, "max-git-procs", 16, "max concurrent git subprocesses")
 	cmd.Flags().IntVar(maxTokens, "max-tokens", 0, "per-group prompt token ceiling (0 = configured or template default)")
 	cmd.Flags().IntVar(maxTokensBudget, "max-tokens-budget", 0, "cap total token usage (input+output) for this review; checked before every LLM round, so a group already over budget gets one final round to submit findings and is reported as failed(budget), and no further groups are dispatched. Partial results are published and review exits 0; it exits non-zero only if every selected item failed (0 = unlimited)")
@@ -167,13 +166,8 @@ func validateReviewOptions(opts *reviewOptions) error {
 		return err
 	}
 	opts.outputFormat = normalizedFormat
-	const minMaxTools = 50
 	if opts.maxTools < 0 {
 		return fmt.Errorf("--max-tools must be a non-negative integer (0 means use template default)")
-	}
-	if opts.maxTools > 0 && opts.maxTools < minMaxTools {
-		fmt.Fprintf(os.Stderr, "[ocr] --max-tools %d is below minimum %d, using %d\n", opts.maxTools, minMaxTools, minMaxTools)
-		opts.maxTools = minMaxTools
 	}
 	if opts.maxGitProcs < 0 {
 		return fmt.Errorf("--max-git-procs must be a non-negative integer (0 means use default 16)")
@@ -268,7 +262,7 @@ func registerScanFlags(cmd *cobra.Command, opts *scanOptions) {
 	addOutputPathFlag(cmd, &opts.outputPath)
 	cmd.Flags().IntVar(&opts.concurrency, "concurrency", 8, "max concurrent subtasks")
 	cmd.Flags().IntVar(&opts.concurrentTaskTimeout, "timeout", 15, taskTimeoutHelp)
-	cmd.Flags().IntVar(&opts.maxTools, "max-tools", 0, "max tool call rounds per subtask; only takes effect when greater than template default")
+	cmd.Flags().IntVar(&opts.maxTools, "max-tools", 0, "max tool call rounds per subtask (0 = template default; an explicit value raises or lowers the cap)")
 	cmd.Flags().IntVar(&opts.maxGitProcs, "max-git-procs", 16, "max concurrent git subprocesses")
 	cmd.Flags().IntVar(&opts.maxTokens, "max-tokens", 0, "per-file prompt token ceiling (0 = configured or template default)")
 	cmd.Flags().IntVar(&opts.maxTokensBudget, "max-tokens-budget", 0, "cap total token usage; checked before every LLM round and at dispatch (0 = unlimited)")

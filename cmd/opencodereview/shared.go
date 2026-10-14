@@ -113,7 +113,11 @@ func loadCommonContext(repoDirInput, rulePath, contentRef string, maxTools, maxG
 	if err != nil {
 		return nil, fmt.Errorf("load default template: %w", err)
 	}
-	if maxTools > tpl.MaxToolRequestTimes {
+	// An explicit --max-tools raises or lowers the per-conversation tool-round
+	// budget (0 = template default). Lowering must survive: the review agent
+	// otherwise explores until the full budget is spent, so the budget is the
+	// direct bound on wall-clock and cost.
+	if maxTools > 0 {
 		tpl.MaxToolRequestTimes = maxTools
 	}
 	if err := tpl.Validate(); err != nil {

@@ -155,7 +155,11 @@ func TestInjectDiffMap(t *testing.T) {
 		t.Errorf("DiffMap did not contain deleted.go diff, got: %q", result2)
 	}
 
-	result3, _ := frd.Execute(context.Background(), map[string]any{
+	// Upstream serves deleted/renamed files under their effective path; on this
+	// fork every model-visible read goes through a planned budget (closed by
+	// default), so the renamed-file read carries the same budgeted context as
+	// a real in-group read would.
+	result3, _ := frd.Execute(ctx, map[string]any{
 		"path_array": []any{"renamed.go"},
 	})
 	if !strings.Contains(result3, "+renamed") {
