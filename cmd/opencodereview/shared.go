@@ -108,7 +108,7 @@ func previewMaxTokens(templateDefault, cliOverride int) (int, error) {
 // inspect when disambiguating ambiguous extensions — derive it via
 // tool.ParseReviewMode(from, to, commit).RefValue(to, commit). Pass "" to
 // read the working tree, which is what scan wants.
-func loadCommonContext(repoDirInput, rulePath, contentRef string, maxTools, maxGitProcs int, requireGit bool) (*commonContext, error) {
+func loadCommonContext(repoDirInput, rulePath, contentRef string, maxTools, groupingMinFiles, maxGitProcs int, requireGit bool) (*commonContext, error) {
 	tpl, err := template.LoadDefault()
 	if err != nil {
 		return nil, fmt.Errorf("load default template: %w", err)
@@ -119,6 +119,12 @@ func loadCommonContext(repoDirInput, rulePath, contentRef string, maxTools, maxG
 	// direct bound on wall-clock and cost.
 	if maxTools > 0 {
 		tpl.MaxToolRequestTimes = maxTools
+	}
+	// MES-4160 — partition per-file below a tool-round ceiling: a group shares
+	// one conversation budget, so under a low cap smaller groups are what keeps
+	// reviews from ending in preserved-finding budget stops.
+	if groupingMinFiles > 0 {
+		tpl.GroupingMinFiles = groupingMinFiles
 	}
 	if err := tpl.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid config: %w", err)

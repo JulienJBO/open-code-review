@@ -130,7 +130,7 @@ func executeScanContext(ctx context.Context, opts scanOptions) (retErr error) {
 		}
 	}()
 
-	cc, err := loadCommonContext(opts.repoDir, opts.rulePath, "", opts.maxTools, opts.maxGitProcs, false)
+	cc, err := loadCommonContext(opts.repoDir, opts.rulePath, "", opts.maxTools, 0, opts.maxGitProcs, false)
 	if err != nil {
 		return err
 	}

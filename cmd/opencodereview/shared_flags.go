@@ -169,6 +169,9 @@ func validateReviewOptions(opts *reviewOptions) error {
 	if opts.maxTools < 0 {
 		return fmt.Errorf("--max-tools must be a non-negative integer (0 means use template default)")
 	}
+	if opts.groupingMinFiles < 0 {
+		return fmt.Errorf("--grouping-min-files must be a non-negative integer (0 means use template default)")
+	}
 	if opts.maxGitProcs < 0 {
 		return fmt.Errorf("--max-git-procs must be a non-negative integer (0 means use default 16)")
 	}
@@ -241,6 +244,7 @@ func registerReviewFlags(cmd *cobra.Command, opts *reviewOptions) {
 	addOutputFlags(cmd, &opts.outputFormat, &opts.audience)
 	addOutputPathFlag(cmd, &opts.outputPath)
 	addConcurrencyFlags(cmd, &opts.concurrency, &opts.concurrentTaskTimeout, &opts.maxTools, &opts.maxGitProcs, &opts.maxTokens, &opts.maxTokensBudget)
+	cmd.Flags().IntVar(&opts.groupingMinFiles, "grouping-min-files", 0, "partition into one group per file once the change set reaches this many files (0 = template default; an explicit value raises or lowers it)")
 	addRequestInputBudgetFlags(cmd, &opts.maxRequestInputTokens, &opts.requestTokenSafetyMargin, &opts.allowInputBudgetReduction)
 	addBackgroundFlags(cmd, &opts.background, &opts.backgroundFile)
 	addProviderFlag(cmd, &opts.provider)
