@@ -26,6 +26,22 @@ type CodeSearchProvider struct {
 
 func NewCodeSearch(fr *FileReader) *CodeSearchProvider { return &CodeSearchProvider{FileReader: fr} }
 
+// maxMatchLineBytes bounds one rendered match line. git grep matches by line,
+// and a single-line blob (minified JSON, embedded base64, lockfile excerpt) is
+// one "line" of unbounded length: it poisons the conversation history, the
+// per-request input guard then refuses every following request, and the group
+// dies on a context stop. Cap at the source instead — locating context is all
+// a search excerpt needs; reading more goes through the budgeted read tools.
+const maxMatchLineBytes = 2000
+
+func truncateMatchLine(content string) string {
+	if len(content) <= maxMatchLineBytes {
+		return content
+	}
+	cut := strings.ToValidUTF8(content[:maxMatchLineBytes], "")
+	return fmt.Sprintf("%s …[%d more bytes truncated]", cut, len(content)-maxMatchLineBytes)
+}
+
 func (p *CodeSearchProvider) Tool() Tool { return CodeSearch }
 
 func (p *CodeSearchProvider) Execute(ctx context.Context, args map[string]any) (string, error) {
@@ -223,7 +239,7 @@ func (p *CodeSearchProvider) gitGrep(ctx context.Context, searchText string, cas
 			truncated = true
 			continue
 		}
-		m := match{lineNum: ln, content: parts[offset+2]}
+		m := match{lineNum: ln, content: truncateMatchLine(parts[offset+2])}
 		if !seen[fname] {
 			seen[fname] = true
 			fileOrder = append(fileOrder, fname)

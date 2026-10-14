@@ -4,6 +4,7 @@
 package main
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
@@ -82,13 +83,18 @@ func TestParseReviewFlags_NegativeMaxTools(t *testing.T) {
 	}
 }
 
-func TestParseReviewFlags_MaxToolsBelowMin(t *testing.T) {
-	opts, err := parseReviewFlags([]string{"--max-tools", "30"})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if opts.maxTools != 50 {
-		t.Errorf("maxTools = %d, want 50 (clamped to min)", opts.maxTools)
+// An explicit --max-tools must be honored in both directions: the bounded
+// review profile depends on lowering the cap (e.g. 10), which the old
+// clamp-to-50 behavior silently refused.
+func TestParseReviewFlags_MaxToolsHonoredVerbatim(t *testing.T) {
+	for _, want := range []int{10, 30, 50, 150} {
+		opts, err := parseReviewFlags([]string{"--max-tools", strconv.Itoa(want)})
+		if err != nil {
+			t.Fatalf("--max-tools %d: unexpected error: %v", want, err)
+		}
+		if opts.maxTools != want {
+			t.Errorf("--max-tools %d: got %d, want verbatim", want, opts.maxTools)
+		}
 	}
 }
 
@@ -394,5 +400,22 @@ func TestScanMaxToolsFlagUsageUsesSubtask(t *testing.T) {
 		if strings.Contains(tc.usage, "per file") {
 			t.Errorf("%s --max-tools usage %q: leaked per file", tc.cmd, tc.usage)
 		}
+	}
+}
+
+// MES-4160 — the per-file partition is the second lever of the bounded profile: under a low
+// tool-round cap, smaller groups avoid budget stops.
+func TestParseReviewFlags_GroupingMinFilesHonoredVerbatim(t *testing.T) {
+	for _, want := range []int{1, 2, 10} {
+		opts, err := parseReviewFlags([]string{"--grouping-min-files", strconv.Itoa(want)})
+		if err != nil {
+			t.Fatalf("--grouping-min-files %d: unexpected error: %v", want, err)
+		}
+		if opts.groupingMinFiles != want {
+			t.Errorf("--grouping-min-files %d: got %d, want verbatim", want, opts.groupingMinFiles)
+		}
+	}
+	if _, err := parseReviewFlags([]string{"--grouping-min-files", "-1"}); err == nil {
+		t.Fatal("expected error for negative grouping-min-files")
 	}
 }

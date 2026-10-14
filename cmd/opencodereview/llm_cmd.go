@@ -35,7 +35,6 @@ var llmTestCmd = &cobra.Command{
 		return runLLMTest()
 	},
 }
-
 var llmProvidersCmd = &cobra.Command{
 	Use:   "providers",
 	Short: "List all built-in LLM providers",
@@ -48,25 +47,34 @@ var llmProvidersCmd = &cobra.Command{
 func init() {
 	llmCmd.AddCommand(llmTestCmd)
 	llmCmd.AddCommand(llmProvidersCmd)
+	llmTestCmd.Flags().StringVar(&llmTestProvider, "provider", "", "verify this provider instead of the configured one (no global config mutation)")
+	llmTestCmd.Flags().StringVar(&llmTestModel, "model", "", "verify this model instead of the configured one (no global config mutation)")
 }
 
 var runLLMTestPath = runLLMTestWithConfigPath
+
+// MES-4160 — preflight flags: verify the couple ACTUALLY pinned by the wrapper's conf before
+// any billed pass, without mutating the machine's global config.
+var (
+	llmTestProvider string
+	llmTestModel    string
+)
 
 func runLLMTest() error {
 	cfgPath, err := defaultConfigPath()
 	if err != nil {
 		return err
 	}
-	return runLLMTestPath(cfgPath)
+	return runLLMTestPath(cfgPath, llm.ResolveOptions{Provider: llmTestProvider, Model: llmTestModel})
 }
 
-func runLLMTestWithConfigPath(configPath string) error {
+func runLLMTestWithConfigPath(configPath string, opts llm.ResolveOptions) error {
 	appCfg, err := LoadAppConfig(configPath)
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	ep, err := llm.ResolveEndpoint(configPath)
+	ep, err := llm.ResolveEndpointWithOptions(configPath, opts)
 	if err != nil {
 		return fmt.Errorf("resolve LLM endpoint: %w", err)
 	}
@@ -84,6 +92,9 @@ func runLLMTestWithConfigPath(configPath string) error {
 	timeout := 30 * time.Second
 	if task.Timeout > 0 {
 		timeout = time.Duration(task.Timeout) * time.Second
+	}
+	if ep.ChatGPTPlan {
+		timeout = llmTestTimeout(task.Timeout, ep.Timeout)
 	}
 
 	// No retry collector: llm test is a connectivity probe, not a review, and the
@@ -163,6 +174,17 @@ func runLLMTestWithConfigPath(configPath string) error {
 		fmt.Println(note)
 	}
 	return nil
+}
+
+func llmTestTimeout(taskSeconds int, endpointTimeout time.Duration) time.Duration {
+	timeout := 30 * time.Second
+	if taskTimeout := time.Duration(taskSeconds) * time.Second; taskTimeout > timeout {
+		timeout = taskTimeout
+	}
+	if endpointTimeout > timeout {
+		timeout = endpointTimeout
+	}
+	return timeout
 }
 
 // testToolDefs offers the configured self-test tool, or none when the task

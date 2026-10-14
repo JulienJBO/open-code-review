@@ -129,7 +129,8 @@ func TestInjectDiffMap(t *testing.T) {
 	})
 	a.diffs = []model.Diff{
 		{NewPath: "main.go", OldPath: "main.go", Diff: "+new code"},
-		{NewPath: "/dev/null", OldPath: "deleted.go", Diff: "-deleted"},
+		{NewPath: "/dev/null", OldPath: "deleted.go", Diff: "-deleted", IsDeleted: true},
+		{NewPath: "renamed.go", OldPath: "old_name.go", Diff: "+renamed", IsRenamed: true},
 	}
 
 	a.injectDiffMap()
@@ -150,8 +151,19 @@ func TestInjectDiffMap(t *testing.T) {
 	result2, _ := frd.Execute(ctx, map[string]any{
 		"path_array": []any{"deleted.go"},
 	})
-	if !strings.Contains(result2, "not found") {
-		t.Errorf("/dev/null path should not be in DiffMap, got: %q", result2)
+	if !strings.Contains(result2, "-deleted") {
+		t.Errorf("DiffMap did not contain deleted.go diff, got: %q", result2)
+	}
+
+	// Upstream serves deleted/renamed files under their effective path; on this
+	// fork every model-visible read goes through a planned budget (closed by
+	// default), so the renamed-file read carries the same budgeted context as
+	// a real in-group read would.
+	result3, _ := frd.Execute(ctx, map[string]any{
+		"path_array": []any{"renamed.go"},
+	})
+	if !strings.Contains(result3, "+renamed") {
+		t.Errorf("DiffMap did not contain renamed.go diff, got: %q", result3)
 	}
 }
 

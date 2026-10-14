@@ -92,7 +92,7 @@ var scanCmd = &cobra.Command{
 		if err := validateScanOptions(&scanOpts); err != nil {
 			return err
 		}
-		return executeScan(scanOpts)
+		return executeScanContext(cmd.Context(), scanOpts)
 	},
 }
 
@@ -115,7 +115,11 @@ func splitPaths(raw string) []string {
 	return out
 }
 
-func executeScan(opts scanOptions) (retErr error) {
+func executeScan(opts scanOptions) error {
+	return executeScanContext(context.Background(), opts)
+}
+
+func executeScanContext(ctx context.Context, opts scanOptions) (retErr error) {
 	out, closeOut, err := resolveOutputWriter(opts.outputPath, opts.outputFormat)
 	if err != nil {
 		return err
@@ -126,7 +130,7 @@ func executeScan(opts scanOptions) (retErr error) {
 		}
 	}()
 
-	cc, err := loadCommonContext(opts.repoDir, opts.rulePath, "", opts.maxTools, opts.maxGitProcs, false)
+	cc, err := loadCommonContext(opts.repoDir, opts.rulePath, "", opts.maxTools, 0, opts.maxGitProcs, false)
 	if err != nil {
 		return err
 	}
@@ -134,7 +138,7 @@ func executeScan(opts scanOptions) (retErr error) {
 
 	// scan owns its own template (scan_template.json) independent from the
 	// diff-review template loaded by loadCommonContext above. Apply --max-tools
-	// as an "only raise" override to the scan template's per-file budget.
+	// as an explicit override (raise or lower) to the scan template's budget.
 	scanTpl, err := template.LoadScanDefault()
 	if err != nil {
 		return fmt.Errorf("load scan template: %w", err)
@@ -142,7 +146,7 @@ func executeScan(opts scanOptions) (retErr error) {
 	if err := scanTpl.Validate(); err != nil {
 		return fmt.Errorf("invalid scan template: %w", err)
 	}
-	if opts.maxTools > scanTpl.MaxToolRequestTimes {
+	if opts.maxTools > 0 {
 		scanTpl.MaxToolRequestTimes = opts.maxTools
 	}
 	if opts.batch != "" {
@@ -181,6 +185,7 @@ func executeScan(opts scanOptions) (retErr error) {
 	rt, err := loadLLMRuntime(cc.Template, opts.toolConfigPath, llm.ResolveOptions{
 		Provider: opts.provider,
 		Model:    opts.model,
+		Context:  ctx,
 	}, inputBudget)
 	if err != nil {
 		return err
@@ -244,7 +249,7 @@ func executeScan(opts scanOptions) (retErr error) {
 	q := newQuietHandle(opts.outputFormat, opts.audience)
 	defer q.Restore()
 
-	ctx, span := telemetry.StartSpan(telemetry.ContextWithTraceParentFromEnv(context.Background()), "scan.run")
+	ctx, span := telemetry.StartSpan(telemetry.ContextWithTraceParentFromEnv(ctx), "scan.run")
 	defer span.End()
 	var traceID string
 	if telemetry.IsEnabled() {

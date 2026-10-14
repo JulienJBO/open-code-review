@@ -45,6 +45,7 @@ type reviewOptions struct {
 	concurrency           int
 	concurrentTaskTimeout int
 	maxTools              int
+	groupingMinFiles      int
 	maxGitProcs           int
 	maxTokens             int
 	maxTokensBudget       int
@@ -145,7 +146,7 @@ func executeReviewContext(ctx context.Context, opts reviewOptions) (retErr error
 	}()
 
 	contentRef, _ := tool.ParseReviewMode(opts.from, opts.to, opts.commit).RefValue(opts.to, opts.commit)
-	cc, err := loadCommonContext(opts.repoDir, opts.rulePath, contentRef, opts.maxTools, opts.maxGitProcs, true)
+	cc, err := loadCommonContext(opts.repoDir, opts.rulePath, contentRef, opts.maxTools, opts.groupingMinFiles, opts.maxGitProcs, true)
 	if err != nil {
 		return err
 	}
@@ -179,6 +180,7 @@ func executeReviewContext(ctx context.Context, opts reviewOptions) (retErr error
 	rt, err := loadLLMRuntime(cc.Template, opts.toolConfigPath, llm.ResolveOptions{
 		Provider: opts.provider,
 		Model:    opts.model,
+		Context:  ctx,
 	}, inputBudget)
 	if err != nil {
 		return err

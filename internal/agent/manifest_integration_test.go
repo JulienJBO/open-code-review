@@ -513,14 +513,15 @@ func (c *groupedBudgetPartialClient) CompletionsWithCtx(_ context.Context, req l
 }
 
 // A group that never calls task_done before exhausting its round budget must
-// classify coverage per file, not per group: a.go already has a comment from
-// round 1, so it belongs in Completed even though the shared conversation
-// stopped on StopMaxRounds; b.go never got a comment, so it stays Failed. The
-// mixed outcome must read as partial (exit 0), not failed (exit 1) — the
-// bitcoin__bitcoin regression this guards against had exactly one file with
-// output and one without in the same stuck group, and the run reported "2 of 2
-// selected item(s) failed" despite the real comment.
-func TestManifestFlowGroupBudgetStopIsPartialWhenSomeFilesHaveComments(t *testing.T) {
+// classify every file as failed, even the ones that already produced comments:
+// the conversation was cut mid tool_calls, so counting a commented file as
+// Completed would fabricate coverage (the MES-4160 "57/57 completed" illusion).
+// The findings themselves are preserved — the comment stays in the review
+// output and the failure reason carries the preserved count — and the run
+// reads failed (exit 1), never a fake complete. This is the honest successor
+// of the bitcoin__bitcoin regression guard: dispatch still returns the real
+// comments instead of a dispatch error.
+func TestManifestFlowGroupBudgetStopFailsTruncatedFilesButPreservesFindings(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	repoDir := t.TempDir()
 	diffs := []model.Diff{
@@ -578,20 +579,40 @@ func TestManifestFlowGroupBudgetStopIsPartialWhenSomeFilesHaveComments(t *testin
 		t.Fatalf("a stuck group with partial output must not be a dispatch error: %v", err)
 	}
 	manifest := finishManifestFlow(t, a)
-	if manifest.TerminalState != session.StatePartial {
-		t.Fatalf("terminal = %q, want partial; manifest = %+v", manifest.TerminalState, manifest)
+	if manifest.TerminalState != session.StateFailed {
+		t.Fatalf("terminal = %q, want failed: every truncated file is failed, with or without findings; manifest = %+v", manifest.TerminalState, manifest)
 	}
 	if manifest.RunFailure != nil {
 		t.Fatalf("run_failure = %+v, want nil for a per-item budget stop", manifest.RunFailure)
 	}
-	if len(manifest.Coverage.Completed) != 1 || manifest.Coverage.Completed[0].Path != "a.go" {
-		t.Fatalf("completed coverage = %+v, want exactly a.go", manifest.Coverage.Completed)
+	if len(manifest.Coverage.Completed) != 0 {
+		t.Fatalf("completed coverage = %+v, want empty: a cap-truncated file is never completed", manifest.Coverage.Completed)
 	}
-	if len(manifest.Coverage.Failed) != 1 || manifest.Coverage.Failed[0].Path != "b.go" {
-		t.Fatalf("failed coverage = %+v, want exactly b.go", manifest.Coverage.Failed)
+	if len(manifest.Coverage.Failed) != 2 {
+		t.Fatalf("failed coverage = %+v, want exactly a.go and b.go", manifest.Coverage.Failed)
 	}
-	if manifest.Coverage.Failed[0].Classification != session.FailureBudget {
-		t.Fatalf("b.go classification = %q, want budget", manifest.Coverage.Failed[0].Classification)
+	byPath := map[string]session.CoverageItem{}
+	for _, item := range manifest.Coverage.Failed {
+		byPath[item.Path] = item
+		if item.Classification != session.FailureBudget {
+			t.Fatalf("%s classification = %q, want budget", item.Path, item.Classification)
+		}
+	}
+	aItem, ok := byPath["a.go"]
+	if !ok {
+		t.Fatalf("failed coverage = %+v, want a.go", manifest.Coverage.Failed)
+	}
+	if !strings.Contains(aItem.Reason, "1 finding(s) preserved") {
+		t.Fatalf("a.go reason = %q, want the preserved-finding count", aItem.Reason)
+	}
+	var preserved int
+	for _, c := range collector.Comments() {
+		if c.Path == "a.go" {
+			preserved++
+		}
+	}
+	if preserved != 1 {
+		t.Fatalf("a.go comments in output = %d, want 1: findings must survive a truncated group", preserved)
 	}
 }
 
