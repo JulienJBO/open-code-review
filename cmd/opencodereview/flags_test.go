@@ -403,8 +403,8 @@ func TestScanMaxToolsFlagUsageUsesSubtask(t *testing.T) {
 	}
 }
 
-// MES-4160 — la partition per-file est le second levier du profil borné : sous
-// un plafond d'outils bas, des groupes plus petits évitent les stops budget.
+// MES-4160 — the per-file partition is the second lever of the bounded profile: under a low
+// tool-round cap, smaller groups avoid budget stops.
 func TestParseReviewFlags_GroupingMinFilesHonoredVerbatim(t *testing.T) {
 	for _, want := range []int{1, 2, 10} {
 		opts, err := parseReviewFlags([]string{"--grouping-min-files", strconv.Itoa(want)})

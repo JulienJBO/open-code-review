@@ -53,8 +53,8 @@ func init() {
 
 var runLLMTestPath = runLLMTestWithConfigPath
 
-// MES-4160 — flags du préflight : vérifier le couple RÉELLEMENT épinglé par la conf du
-// wrapper avant toute passe facturée, sans muter la config globale du poste.
+// MES-4160 — preflight flags: verify the couple ACTUALLY pinned by the wrapper's conf before
+// any billed pass, without mutating the machine's global config.
 var (
 	llmTestProvider string
 	llmTestModel    string
