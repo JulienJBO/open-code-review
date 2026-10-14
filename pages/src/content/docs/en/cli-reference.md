@@ -637,8 +637,12 @@ Sub-commands:
 ### `ocr llm test`
 
 ```text
-ocr llm test
+ocr llm test [--provider <name>] [--model <id>]
 ```
+
+`--provider` and `--model` verify an explicit couple instead of the configured
+one, without touching the global config — the preflight path for a wrapper that
+pins the provider/model in its own configuration.
 
 Resolves the LLM endpoint exactly the way `ocr review` does, sends a single
 canned chat request from

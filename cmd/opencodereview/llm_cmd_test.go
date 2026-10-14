@@ -224,7 +224,7 @@ func TestLLMTestCommand_UsesDefaultConfigPath(t *testing.T) {
 	original := runLLMTestPath
 	t.Cleanup(func() { runLLMTestPath = original })
 	var gotPath string
-	runLLMTestPath = func(configPath string) error {
+	runLLMTestPath = func(configPath string, _ llm.ResolveOptions) error {
 		gotPath = configPath
 		return nil
 	}

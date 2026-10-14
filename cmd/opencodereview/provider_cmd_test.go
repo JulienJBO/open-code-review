@@ -10,13 +10,15 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+
+	"github.com/alibaba/open-code-review/internal/llm"
 )
 
 func isolateLLMConnectionTest(t *testing.T) {
 	t.Helper()
 	original := runLLMTestPath
 	t.Cleanup(func() { runLLMTestPath = original })
-	runLLMTestPath = func(string) error { return nil }
+	runLLMTestPath = func(string, llm.ResolveOptions) error { return nil }
 }
 
 func TestMaskKey(t *testing.T) {
@@ -241,7 +243,7 @@ func TestApplyProviderConfig_TestsWrittenConfigPath(t *testing.T) {
 			original := runLLMTestPath
 			t.Cleanup(func() { runLLMTestPath = original })
 			calls := 0
-			runLLMTestPath = func(path string) error {
+			runLLMTestPath = func(path string, _ llm.ResolveOptions) error {
 				calls++
 				if path != configPath {
 					t.Fatalf("connection test path = %q, want %q", path, configPath)

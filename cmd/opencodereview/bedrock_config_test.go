@@ -356,7 +356,7 @@ func TestProviderTUINonConfigCredentialProviderSkipsAPIKeyStep(t *testing.T) {
 func TestProviderTUINonConfigCredentialProviderDropsPreviousKey(t *testing.T) {
 	original := runLLMTestPath
 	t.Cleanup(func() { runLLMTestPath = original })
-	runLLMTestPath = func(string) error { return nil }
+	runLLMTestPath = func(string, llm.ResolveOptions) error { return nil }
 	for _, provider := range []string{"bedrock", "chatgpt"} {
 		for _, typed := range []bool{false, true} {
 			name := provider + "/saved"

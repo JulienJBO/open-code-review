@@ -35,7 +35,6 @@ var llmTestCmd = &cobra.Command{
 		return runLLMTest()
 	},
 }
-
 var llmProvidersCmd = &cobra.Command{
 	Use:   "providers",
 	Short: "List all built-in LLM providers",
@@ -48,25 +47,34 @@ var llmProvidersCmd = &cobra.Command{
 func init() {
 	llmCmd.AddCommand(llmTestCmd)
 	llmCmd.AddCommand(llmProvidersCmd)
+	llmTestCmd.Flags().StringVar(&llmTestProvider, "provider", "", "verify this provider instead of the configured one (no global config mutation)")
+	llmTestCmd.Flags().StringVar(&llmTestModel, "model", "", "verify this model instead of the configured one (no global config mutation)")
 }
 
 var runLLMTestPath = runLLMTestWithConfigPath
+
+// MES-4160 — flags du préflight : vérifier le couple RÉELLEMENT épinglé par la conf du
+// wrapper avant toute passe facturée, sans muter la config globale du poste.
+var (
+	llmTestProvider string
+	llmTestModel    string
+)
 
 func runLLMTest() error {
 	cfgPath, err := defaultConfigPath()
 	if err != nil {
 		return err
 	}
-	return runLLMTestPath(cfgPath)
+	return runLLMTestPath(cfgPath, llm.ResolveOptions{Provider: llmTestProvider, Model: llmTestModel})
 }
 
-func runLLMTestWithConfigPath(configPath string) error {
+func runLLMTestWithConfigPath(configPath string, opts llm.ResolveOptions) error {
 	appCfg, err := LoadAppConfig(configPath)
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	ep, err := llm.ResolveEndpoint(configPath)
+	ep, err := llm.ResolveEndpointWithOptions(configPath, opts)
 	if err != nil {
 		return fmt.Errorf("resolve LLM endpoint: %w", err)
 	}

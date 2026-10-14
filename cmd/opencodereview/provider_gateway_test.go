@@ -60,7 +60,7 @@ func TestProviderGatewayKeySurvivesModelSelection(t *testing.T) {
 	}
 	oldTest := runLLMTestPath
 	t.Cleanup(func() { runLLMTestPath = oldTest })
-	runLLMTestPath = func(path string) error {
+	runLLMTestPath = func(path string, _ llm.ResolveOptions) error {
 		_, err := llm.ResolveEndpointWithOptions(path, llm.ResolveOptions{Provider: "bedrock"})
 		return err
 	}
@@ -95,7 +95,7 @@ func TestProviderAmbientProtocolOverrideCanBeSaved(t *testing.T) {
 	}
 	previous := runLLMTestPath
 	t.Cleanup(func() { runLLMTestPath = previous })
-	runLLMTestPath = func(path string) error {
+	runLLMTestPath = func(path string, _ llm.ResolveOptions) error {
 		ep, err := llm.ResolveEndpointWithOptions(path, llm.ResolveOptions{Provider: "anthropic"})
 		if err == nil && (!ep.AmbientAuth || ep.Token != "") {
 			t.Error("saved ambient protocol requires a token")
